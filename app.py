@@ -60,7 +60,13 @@ map_fig = px.choropleth(
     title=f"World map colored by {color_col}" if color_col else "World map",
     template="infra_dark",
 )
-map_fig.update_layout(height=320)
+map_fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
+map_fig.update_geos(
+    bgcolor=THEME["panel"],
+    showocean=True, oceancolor=THEME["panel"],
+    showland=True, landcolor=THEME["panel_alt"],
+    showcountries=True, countrycolor="rgba(255,255,255,0.15)"
+)
 
 # -----------------------------------------------------------------------------
 # Layout: 3 x 2 grid of blocks
@@ -86,6 +92,7 @@ app.layout = html.Div(
                     children=[
                         html.H3("World Map", className="panel-title"),
                         dcc.Graph(
+                            config={"displayModeBar": False},
                             id="world-map",
                             figure=map_fig,
                             className="panel-content",

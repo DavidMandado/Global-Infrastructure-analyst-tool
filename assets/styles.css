@@ -55,6 +55,17 @@ body {
     font-size: 0.9rem;
 }
 
+.panel-tight {
+    padding: 5px;
+    /* smaller padding than normal */
+}
+
+.panel-tight .panel-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    /* IMPORTANT: prevents overflow weirdness */
+}
+
 /* Selected country label */
 .selected-country {
     text-align: center;
