@@ -13,6 +13,16 @@ colors = {
     "text": "#FFFFFF",
 }
 
+THEME = {
+    "background": "#05060A",
+    "panel": "#111827",
+    "panel_alt": "#020617",
+    "text": "#F9FAFB",
+    "muted_text": "#9CA3AF",
+    "accent": "#22C55E",   # green
+}
+
+
 # Load your merged CIA data
 df = pd.read_csv("data/CIA_DATA.csv")
 
