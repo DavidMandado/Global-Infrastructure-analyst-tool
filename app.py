@@ -1,17 +1,13 @@
 from dash import Dash, html, dcc, Input, Output
 import plotly.express as px
+import plotly.io as pio
+import plotly.graph_objects as go
 import pandas as pd
 
 # -----------------------------------------------------------------------------
-# App + data
+# App + theme
 # -----------------------------------------------------------------------------
 app = Dash(__name__)
-
-colors = {
-    "background": "#000000",
-    "panel": "#111111",
-    "text": "#FFFFFF",
-}
 
 THEME = {
     "background": "#05060A",
@@ -22,217 +18,142 @@ THEME = {
     "accent": "#22C55E",   # green
 }
 
+# Plotly template for consistent styling
+pio.templates["infra_dark"] = go.layout.Template(
+    layout=dict(
+        paper_bgcolor=THEME["panel"],
+        plot_bgcolor=THEME["panel"],
+        font=dict(
+            family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+            color=THEME["text"],
+            size=12,
+        ),
+        margin=dict(l=40, r=20, t=40, b=40),
+        legend=dict(
+            bgcolor="rgba(0,0,0,0)",
+        ),
+    )
+)
+pio.templates.default = "infra_dark"
 
-# Load your merged CIA data
+# -----------------------------------------------------------------------------
+# Data
+# -----------------------------------------------------------------------------
 df = pd.read_csv("data/CIA_DATA.csv")
 
-# Try to guess some numeric columns for template plots
-numeric_cols = df.select_dtypes(include="number").columns.tolist()
+# Choose a metric for map color
+if "Real_GDP_per_Capita_USD" in df.columns:
+    color_col = "Real_GDP_per_Capita_USD"
+else:
+    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+    color_col = numeric_cols[0] if numeric_cols else None
 
 # -----------------------------------------------------------------------------
 # Figures
 # -----------------------------------------------------------------------------
-
-# 1) World map (choropleth)
-#    Assumes you have a column called "Country" with country names that Plotly recognizes.
-#    For color, we use the first numeric column if you don't want to hardcode something.
-color_col = None
-if numeric_cols:
-    color_col = numeric_cols[0]
-
 map_fig = px.choropleth(
     df,
-    locations="Country",             # <-- adjust if your column is named differently
+    locations="Country",             # adjust if your column is named differently
     locationmode="country names",
     color=color_col,
     color_continuous_scale="Viridis",
     title=f"World map colored by {color_col}" if color_col else "World map",
+    template="infra_dark",
 )
-map_fig.update_layout(
-    height=300,
-    paper_bgcolor=colors["panel"],
-    plot_bgcolor=colors["panel"],
-    font_color=colors["text"],
-)
-
-# 2) Template scatter plot: first two numeric columns
-if len(numeric_cols) >= 2:
-    scatter_fig = px.scatter(
-        df,
-        x=numeric_cols[0],
-        y=numeric_cols[1],
-        hover_name="Country" if "Country" in df.columns else None,
-        title=f"Scatter: {numeric_cols[0]} vs {numeric_cols[1]}",
-    )
-else:
-    scatter_fig = px.scatter(title="Scatter (needs numeric columns)")
-scatter_fig.update_layout(
-    height=300,
-    paper_bgcolor=colors["panel"],
-    plot_bgcolor=colors["panel"],
-    font_color=colors["text"],
-)
-
-# 3) Template histogram: first numeric column
-if numeric_cols:
-    hist_fig = px.histogram(
-        df,
-        x=numeric_cols[0],
-        nbins=30,
-        title=f"Distribution of {numeric_cols[0]}",
-    )
-else:
-    hist_fig = px.histogram(title="Histogram (needs numeric columns)")
-hist_fig.update_layout(
-    height=300,
-    paper_bgcolor=colors["panel"],
-    plot_bgcolor=colors["panel"],
-    font_color=colors["text"],
-)
-
-# 4) Another template plot (e.g., bar of top 10 countries on first numeric col)
-if "Country" in df.columns and numeric_cols:
-    df_top = df.nlargest(10, numeric_cols[0])
-    bar_fig = px.bar(
-        df_top,
-        x="Country",
-        y=numeric_cols[0],
-        title=f"Top 10 countries by {numeric_cols[0]}",
-    )
-    bar_fig.update_layout(
-        height=300,
-        xaxis_tickangle=-45,
-        paper_bgcolor=colors["panel"],
-        plot_bgcolor=colors["panel"],
-        font_color=colors["text"],
-    )
-else:
-    bar_fig = px.bar(title="Bar (needs Country + numeric column)")
-    bar_fig.update_layout(
-        height=300,
-        paper_bgcolor=colors["panel"],
-        plot_bgcolor=colors["panel"],
-        font_color=colors["text"],
-    )
+map_fig.update_layout(height=320)
 
 # -----------------------------------------------------------------------------
 # Layout: 3 x 2 grid of blocks
 # -----------------------------------------------------------------------------
 app.layout = html.Div(
-    className = "app-page",
-    style={
-        "backgroundColor": colors["background"],
-        "minHeight": "100vh",
-        "padding": "1rem",
-        "color": colors["text"],
-    },
+    className="app-page",
     children=[
         html.H1(
-            className = "app-title"
             "Global Infrastructure Investment Atlas (Demo Layout)",
-            style={"textAlign": "center", "marginBottom": "1rem"},
+            className="app-title",
         ),
 
         # Small text area that will show the selected country from the map
         html.Div(
             id="selected-country",
-            style={
-                "textAlign": "center",
-                "marginBottom": "1rem",
-                "fontSize": "1.1rem",
-            },
+            className="selected-country",
             children="Click a country on the map to select it.",
         ),
 
         # Grid container
         html.Div(
-            className = "app-grid",
-            style={
-                "display": "grid",
-                "gridTemplateColumns": "repeat(3, 1fr)",     # 3 columns
-                "gridTemplateRows": "repeat(2, 360px)",      # 2 fixed-height rows
-                "gap": "1rem",
-            },
+            className="app-grid",
             children=[
                 # Block 1: World map
                 html.Div(
-                    style={
-                        "backgroundColor": colors["panel"],
-                        "padding": "0.5rem",
-                        "borderRadius": "8px",
-                    },
+                    className="panel",
                     children=[
-                        html.H3("World Map", style={"margin": "0 0 0.5rem 0"}),
-                        dcc.Graph(id="world-map", figure=map_fig),
+                        html.H3("World Map", className="panel-title"),
+                        dcc.Graph(
+                            id="world-map",
+                            figure=map_fig,
+                            className="panel-content",
+                        ),
                     ],
                 ),
 
-                # Block 2: Scatter
+                # Block 2: empty placeholder for future view
                 html.Div(
-                    style={
-                        "backgroundColor": colors["panel"],
-                        "padding": "0.5rem",
-                        "borderRadius": "8px",
-                    },
+                    className="panel",
                     children=[
-                        html.H3("Global Scatter", style={"margin": "0 0 0.5rem 0"}),
-                        dcc.Graph(id="scatter-1", figure=scatter_fig),
+                        html.H3("View 2", className="panel-title"),
+                        html.Div(
+                            "Placeholder for future view 2",
+                            className="panel-placeholder",
+                        ),
                     ],
                 ),
 
-                # Block 3: Histogram
+                # Block 3: empty placeholder for future view
                 html.Div(
-                    style={
-                        "backgroundColor": colors["panel"],
-                        "padding": "0.5rem",
-                        "borderRadius": "8px",
-                    },
+                    className="panel",
                     children=[
-                        html.H3("Distribution", style={"margin": "0 0 0.5rem 0"}),
-                        dcc.Graph(id="hist-1", figure=hist_fig),
+                        html.H3("View 3", className="panel-title"),
+                        html.Div(
+                            "Placeholder for future view 3",
+                            className="panel-placeholder",
+                        ),
                     ],
                 ),
 
-                # Block 4: Bar chart
+                # Block 4: empty placeholder for future view
                 html.Div(
-                    style={
-                        "backgroundColor": colors["panel"],
-                        "padding": "0.5rem",
-                        "borderRadius": "8px",
-                    },
+                    className="panel",
                     children=[
-                        html.H3("Top 10 (Template)", style={"margin": "0 0 0.5rem 0"}),
-                        dcc.Graph(id="bar-1", figure=bar_fig),
+                        html.H3("View 4", className="panel-title"),
+                        html.Div(
+                            "Placeholder for future view 4",
+                            className="panel-placeholder",
+                        ),
                     ],
                 ),
 
                 # Block 5: empty placeholder for future view
                 html.Div(
-                    style={
-                        "backgroundColor": colors["panel"],
-                        "padding": "0.5rem",
-                        "borderRadius": "8px",
-                        "display": "flex",
-                        "alignItems": "center",
-                        "justifyContent": "center",
-                    },
+                    className="panel",
                     children=[
-                        html.Div("Placeholder for future view 1"),
+                        html.H3("View 5", className="panel-title"),
+                        html.Div(
+                            "Placeholder for future view 5",
+                            className="panel-placeholder",
+                        ),
                     ],
                 ),
 
                 # Block 6: empty placeholder for future view
                 html.Div(
-                    style={
-                        "backgroundColor": colors["panel"],
-                        "padding": "0.5rem",
-                        "borderRadius": "8px",
-                        "display": "flex",
-                        "alignItems": "center",
-                        "justifyContent": "center",
-                    },
+                    className="panel",
                     children=[
-                        html.Div("Placeholder for future view 2"),
+                        html.H3("View 6", className="panel-title"),
+                        html.Div(
+                            "Placeholder for future view 6",
+                            className="panel-placeholder",
+                        ),
                     ],
                 ),
             ],
