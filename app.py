@@ -68,10 +68,6 @@ map_fig.update_layout(height=320)
 app.layout = html.Div(
     className="app-page",
     children=[
-        html.H1(
-            "Global Infrastructure Investment Atlas (Demo Layout)",
-            className="app-title",
-        ),
 
         # Small text area that will show the selected country from the map
         html.Div(
