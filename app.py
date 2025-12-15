@@ -119,6 +119,7 @@ else:
 # Layout: 3 x 2 grid of blocks
 # -----------------------------------------------------------------------------
 app.layout = html.Div(
+    className = "app-page",
     style={
         "backgroundColor": colors["background"],
         "minHeight": "100vh",
@@ -127,6 +128,7 @@ app.layout = html.Div(
     },
     children=[
         html.H1(
+            className = "app-title"
             "Global Infrastructure Investment Atlas (Demo Layout)",
             style={"textAlign": "center", "marginBottom": "1rem"},
         ),
@@ -144,6 +146,7 @@ app.layout = html.Div(
 
         # Grid container
         html.Div(
+            className = "app-grid",
             style={
                 "display": "grid",
                 "gridTemplateColumns": "repeat(3, 1fr)",     # 3 columns
