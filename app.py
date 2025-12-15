@@ -53,20 +53,28 @@ else:
 # -----------------------------------------------------------------------------
 map_fig = px.choropleth(
     df,
-    locations="Country",             # adjust if your column is named differently
+    locations="Country",      
     locationmode="country names",
     color=color_col,
     color_continuous_scale="Viridis",
-    title=f"World map colored by {color_col}" if color_col else "World map",
     template="infra_dark",
 )
-map_fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
+map_fig.update_layout(coloraxis_showscale=False, 
+                      margin=dict(l=0, r=0, t=0, b=0), 
+                      showlegend=False,
+                      dragmode=False
+                      )
 map_fig.update_geos(
     bgcolor=THEME["panel"],
     showocean=True, oceancolor=THEME["panel"],
     showland=True, landcolor=THEME["panel_alt"],
-    showcountries=True, countrycolor="rgba(255,255,255,0.15)"
+    showcountries=True, countrycolor="rgba(255,255,255,0.15)",
+    showframe=False,
+    framecolor="rgba(0,0,0,0)",
 )
+map_fig.update_traces(showscale=False, marker_line_width=0)
+
+
 
 # -----------------------------------------------------------------------------
 # Layout: 3 x 2 grid of blocks
@@ -88,14 +96,13 @@ app.layout = html.Div(
             children=[
                 # Block 1: World map
                 html.Div(
-                    className="panel",
+                    className="panelworld panelworld-tight",
                     children=[
-                        html.H3("World Map", className="panel-title"),
                         dcc.Graph(
                             config={"displayModeBar": False},
                             id="world-map",
                             figure=map_fig,
-                            className="panel-content",
+                            className="panelworld-content",
                         ),
                     ],
                 ),
@@ -111,50 +118,80 @@ app.layout = html.Div(
                         ),
                     ],
                 ),
+            ],
+        ),
+        
+        # Grid container
+        html.Div(
+            className="app-grid2",
+            children=[
+                # Block 2: empty placeholder for future view
+                html.Div(
+                    className="panel",
+                    children=[
+                        html.H3("View 2", className="panel-title"),
+                        html.Div(
+                            "Placeholder for future view 2",
+                            className="panel-placeholder",
+                        ),
+                    ],
+                ),
 
+                # Block 2: empty placeholder for future view
+                html.Div(
+                    className="panel",
+                    children=[
+                        html.H3("View 2", className="panel-title"),
+                        html.Div(
+                            "Placeholder for future view 2",
+                            className="panel-placeholder",
+                        ),
+                    ],
+                ),
+                
                 # Block 3: empty placeholder for future view
                 html.Div(
                     className="panel",
                     children=[
                         html.H3("View 3", className="panel-title"),
                         html.Div(
-                            "Placeholder for future view 3",
+                            "Placeholder for future view 2",
                             className="panel-placeholder",
                         ),
                     ],
                 ),
-
+                
                 # Block 4: empty placeholder for future view
                 html.Div(
                     className="panel",
                     children=[
                         html.H3("View 4", className="panel-title"),
                         html.Div(
-                            "Placeholder for future view 4",
+                            "Placeholder for future view 2",
                             className="panel-placeholder",
                         ),
                     ],
                 ),
-
+                
                 # Block 5: empty placeholder for future view
                 html.Div(
                     className="panel",
                     children=[
                         html.H3("View 5", className="panel-title"),
                         html.Div(
-                            "Placeholder for future view 5",
+                            "Placeholder for future view 2",
                             className="panel-placeholder",
                         ),
                     ],
                 ),
-
+                
                 # Block 6: empty placeholder for future view
                 html.Div(
                     className="panel",
                     children=[
                         html.H3("View 6", className="panel-title"),
                         html.Div(
-                            "Placeholder for future view 6",
+                            "Placeholder for future view 2",
                             className="panel-placeholder",
                         ),
                     ],

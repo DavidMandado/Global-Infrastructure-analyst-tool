@@ -23,16 +23,31 @@ body {
 /* Grid for the main dashboard blocks */
 .app-grid {
     display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-rows: repeat(1, 360px);
+    gap: 12px;
+}
+
+.app-grid2 {
+    display: grid;
     grid-template-columns: repeat(3, 1fr);
     grid-template-rows: repeat(2, 360px);
     gap: 12px;
 }
+
 
 /* Reusable card/panel */
 .panel {
     background-color: #111827;
     border-radius: 10px;
     padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+}
+
+.panelworld {
+    background-color: #111827;
+    border-radius: 10px;
     display: flex;
     flex-direction: column;
 }
@@ -47,6 +62,10 @@ body {
     flex: 1 1 auto;
 }
 
+.panelworld-content {
+    flex: 1 1 auto;
+}
+
 .panel-placeholder {
     display: flex;
     align-items: center;
@@ -56,12 +75,24 @@ body {
 }
 
 .panel-tight {
-    padding: 5px;
+    padding: 0px;
     /* smaller padding than normal */
+}
+
+.panelworld-tight {
+    padding: 0;
+    /* no padding */
+    overflow: hidden;
+    /* clip any plot overflow to rounded corners */
 }
 
 .panel-tight .panel-content {
     flex: 1 1 auto;
+    min-height: 0;
+    /* IMPORTANT: prevents overflow weirdness */
+}
+
+.panelworld-tight .panelworld-content {
     min-height: 0;
     /* IMPORTANT: prevents overflow weirdness */
 }
@@ -71,4 +102,10 @@ body {
     text-align: center;
     font-size: 1rem;
     color: #E5E7EB;
+}
+
+.js-plotly-plot,
+.plot-container,
+.svg-container {
+    background: transparent !important;
 }
