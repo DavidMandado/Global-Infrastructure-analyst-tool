@@ -62,7 +62,7 @@ map_fig = px.choropleth(
 map_fig.update_layout(coloraxis_showscale=False, 
                       margin=dict(l=0, r=0, t=0, b=0), 
                       showlegend=False,
-                      dragmode=False
+                      dragmode="zoom"
                       )
 map_fig.update_geos(
     bgcolor=THEME["panel"],
