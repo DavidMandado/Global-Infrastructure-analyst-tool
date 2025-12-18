@@ -82,12 +82,12 @@ body {
 .panelworld-tight {
     padding: 0;
     /* no padding */
-    overflow: hidden;
+    overflow: auto;
     /* clip any plot overflow to rounded corners */
 }
 
 .panel-tight .panel-content {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     min-height: 0;
     /* IMPORTANT: prevents overflow weirdness */
 }

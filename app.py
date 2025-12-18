@@ -99,11 +99,16 @@ app.layout = html.Div(
                     className="panelworld panelworld-tight",
                     children=[
                         dcc.Graph(
-                            config={"displayModeBar": False},
                             id="world-map",
                             figure=map_fig,
                             className="panelworld-content",
-                        ),
+                            style={"height": "100%", "width": "100%"},
+                            config={
+                                "displayModeBar": False,
+                                "scrollZoom": True,     # wheel/trackpad zoom works
+                                "doubleClick": "reset", # double click resets view
+                            },
+                        )   
                     ],
                 ),
 
