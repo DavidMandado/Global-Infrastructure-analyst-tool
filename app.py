@@ -87,43 +87,25 @@ app.layout = html.Div(
         html.Div(
             id="selected-country",
             className="selected-country",
-            children="Click a country on the map to select it.",
+            children="Click a country on the map to see more information.",
         ),
 
         # Grid container
         html.Div(
-            className="app-grid",
+            className="map-layout",
             children=[
-                # Block 1: World map
-                html.Div(
-                    className="panelworld panelworld-tight",
-                    children=[
-                        dcc.Graph(
-                            id="world-map",
-                            figure=map_fig,
-                            className="panelworld-content",
-                            style={"height": "100%", "width": "100%"},
-                            config={
-                                "displayModeBar": False,
-                                "scrollZoom": True,     # wheel/trackpad zoom works
-                                "doubleClick": "reset", # double click resets view
-                            },
-                        )   
-                    ],
-                ),
-
-                # Block 2: empty placeholder for future view
-                html.Div(
-                    className="panel",
-                    children=[
-                        html.H3("View 2", className="panel-title"),
-                        html.Div(
-                            "Placeholder for future view 2",
-                            className="panel-placeholder",
-                        ),
-                    ],
-                ),
-            ],
+                dcc.Graph(
+                        id="world-map",
+                        figure=map_fig,
+                        className="panelworld-content",
+                        style={"height": "100%", "width": "100%"},
+                        config={
+                            "displayModeBar": False,
+                            "scrollZoom": True,     # wheel/trackpad zoom works
+                            "doubleClick": "reset", # double click resets view
+                        },
+                    ),   
+                ],
         ),
         
         # Grid container
