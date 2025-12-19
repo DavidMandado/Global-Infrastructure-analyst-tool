@@ -62,7 +62,8 @@ map_fig = px.choropleth(
 map_fig.update_layout(coloraxis_showscale=False, 
                       margin=dict(l=0, r=0, t=0, b=0), 
                       showlegend=False,
-                      dragmode="zoom"
+                      dragmode="zoom",
+                      autosize=True
                       )
 map_fig.update_geos(
     bgcolor=THEME["panel"],
@@ -71,8 +72,12 @@ map_fig.update_geos(
     showcountries=True, countrycolor="rgba(255,255,255,0.15)",
     showframe=False,
     framecolor="rgba(0,0,0,0)",
+    fitbounds="locations"
+    projection_scale=1.35,   # increase to zoom in (1.1–1.8 common)
+    center=dict(lat=20, lon=0)  # tweak if needed
 )
 map_fig.update_traces(showscale=False, marker_line_width=0)
+
 
 
 
@@ -95,16 +100,16 @@ app.layout = html.Div(
             className="map-layout",
             children=[
                 dcc.Graph(
-                        id="world-map",
-                        figure=map_fig,
-                        className="panelworld-content",
-                        style={"height": "100%", "width": "100%"},
-                        config={
-                            "displayModeBar": False,
-                            "scrollZoom": True,     # wheel/trackpad zoom works
-                            "doubleClick": "reset", # double click resets view
+                    id="world-map",
+                    figure=map_fig,
+                    style={"height": "100%", "width": "100%"},
+                    config={
+                        "displayModeBar": False,
+                        "scrollZoom": True,
+                        "doubleClick": "reset",
+                        "responsive": True,
                         },
-                    ),   
+                    ),  
                 ],
         ),
         

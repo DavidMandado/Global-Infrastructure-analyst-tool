@@ -110,4 +110,16 @@ body {
     background: transparent !important;
 }
 
-.map-layout {}
+.map-layout {
+    width: 100%;
+    height: 45vh;
+    /* 45% of viewport height */
+    min-height: 320px;
+    max-height: 560px;
+    display: flex;
+}
+
+.map-layout>div {
+    width: 100%;
+    height: 100%;
+}
