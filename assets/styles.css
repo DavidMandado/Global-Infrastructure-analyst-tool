@@ -1,3 +1,4 @@
+/* Base page style */
 body {
     margin: 0;
     background-color: #05060A;
@@ -14,27 +15,12 @@ body {
     gap: 12px;
 }
 
-/* Page title */
-.app-title {
+/* Selected country label */
+.selected-country {
     text-align: center;
-    margin-bottom: 4px;
+    font-size: 1rem;
+    color: #E5E7EB;
 }
-
-/* Grid for the main dashboard blocks */
-.app-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    grid-template-rows: repeat(1, 360px);
-    gap: 12px;
-}
-
-.app-grid2 {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    grid-template-rows: repeat(2, 360px);
-    gap: 12px;
-}
-
 
 /* Reusable card/panel */
 .panel {
@@ -45,28 +31,36 @@ body {
     flex-direction: column;
 }
 
-.panelworld {
-    background-color: #111827;
-    border-radius: 10px;
-    display: flex;
-    flex-direction: column;
+/* Optional: flush panel for full-bleed plots (map) */
+.panel-tight {
+    padding: 0;
+    overflow: hidden;
+    /* ensures plot respects rounded corners */
 }
 
+/* Panel title */
 .panel-title {
-    margin: 0 0 6px 0;
+    margin: 8px 12px 6px 12px;
+    /* looks good even in panel-tight */
     font-size: 0.95rem;
     font-weight: 600;
 }
 
+/* If panel is tight, remove extra title padding so it aligns nicely */
+.panel-tight .panel-title {
+    margin: 10px 12px 6px 12px;
+}
+
+/* Plot container inside a panel */
 .panel-content {
     flex: 1 1 auto;
+    min-height: 0;
+    /* critical for Plotly sizing inside flex containers */
 }
 
-.panelworld-content {
-    flex: 1 1 auto;
-}
-
+/* Placeholder content */
 .panel-placeholder {
+    flex: 1 1 auto;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -74,52 +68,55 @@ body {
     font-size: 0.9rem;
 }
 
-.panel-tight {
-    padding: 0px;
-    /* smaller padding than normal */
+/* Top row: map + side panel */
+.top-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+
+    height: 45vh;
+    min-height: 360px;
+    max-height: 520px;
 }
 
-.panelworld-tight {
-    padding: 0;
-    /* no padding */
-    overflow: auto;
-    /* clip any plot overflow to rounded corners */
+/* Make the two top panels fill the row height */
+.top-row .panel {
+    height: 100%;
 }
 
-.panel-tight .panel-content {
-    flex: 0 0 auto;
-    min-height: 0;
-    /* IMPORTANT: prevents overflow weirdness */
+/* Ensure Plotly graph fills available space */
+.top-row .panel-content {
+    height: 100%;
 }
 
-.panelworld-tight .panelworld-content {
-    min-height: 0;
-    /* IMPORTANT: prevents overflow weirdness */
+/* Lower grid: 3 columns x 2 rows */
+.app-grid2 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-auto-rows: 360px;
+    gap: 12px;
 }
 
-/* Selected country label */
-.selected-country {
-    text-align: center;
-    font-size: 1rem;
-    color: #E5E7EB;
-}
-
+/* Plotly background: keep transparent so it blends with the panel */
 .js-plotly-plot,
 .plot-container,
 .svg-container {
     background: transparent !important;
 }
 
-.map-layout {
-    width: 100%;
-    height: 45vh;
-    /* 45% of viewport height */
-    min-height: 320px;
-    max-height: 560px;
-    display: flex;
-}
+/* Responsive: stack top row on small screens */
+@media (max-width: 900px) {
+    .top-row {
+        grid-template-columns: 1fr;
+        height: auto;
+    }
 
-.map-layout>div {
-    width: 100%;
-    height: 100%;
+    .top-row .panel {
+        height: 420px;
+    }
+
+    .app-grid2 {
+        grid-template-columns: 1fr;
+        grid-auto-rows: 360px;
+    }
 }
