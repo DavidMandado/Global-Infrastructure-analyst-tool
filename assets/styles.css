@@ -120,3 +120,88 @@ body {
         grid-auto-rows: 360px;
     }
 }
+
+/* dropdown styling */
+
+/* ---- Dark dropdown (dcc.Dropdown uses react-select) ---- */
+.dark-dropdown .Select-control {
+    background-color: #020617 !important;
+    /* panel_alt */
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 8px !important;
+    color: #F9FAFB !important;
+    /* text */
+    box-shadow: none !important;
+}
+
+.dark-dropdown .Select-control:hover {
+    border-color: rgba(255, 255, 255, 0.22) !important;
+}
+
+.dark-dropdown .Select-value-label {
+    color: #F9FAFB !important;
+}
+
+.dark-dropdown .Select-placeholder {
+    color: #9CA3AF !important;
+    /* muted_text */
+}
+
+.dark-dropdown .Select-input>input {
+    color: #F9FAFB !important;
+}
+
+/* Dropdown arrow */
+.dark-dropdown .Select-arrow {
+    border-color: #9CA3AF transparent transparent !important;
+}
+
+.dark-dropdown .is-open .Select-arrow {
+    border-color: transparent transparent #9CA3AF !important;
+}
+
+/* The dropdown menu panel */
+.dark-dropdown .Select-menu-outer {
+    background-color: #020617 !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 8px !important;
+    margin-top: 6px !important;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35) !important;
+}
+
+/* Each option */
+.dark-dropdown .Select-option {
+    background-color: #020617 !important;
+    color: #F9FAFB !important;
+}
+
+/* Hovered option */
+.dark-dropdown .Select-option.is-focused {
+    background-color: rgba(34, 197, 94, 0.12) !important;
+    /* accent tint */
+    color: #F9FAFB !important;
+}
+
+/* Selected option */
+.dark-dropdown .Select-option.is-selected {
+    background-color: rgba(34, 197, 94, 0.22) !important;
+    color: #F9FAFB !important;
+}
+
+/* If you use multi dropdown later (chips) */
+.dark-dropdown .Select--multi .Select-value {
+    background-color: rgba(34, 197, 94, 0.18) !important;
+    border: 1px solid rgba(34, 197, 94, 0.35) !important;
+    color: #F9FAFB !important;
+}
+
+.dark-dropdown .Select--multi .Select-value-icon {
+    border-right: 1px solid rgba(34, 197, 94, 0.25) !important;
+    color: #F9FAFB !important;
+}
+
+/* dropdown stykling end */
+
+.panel-tight .panel-content {
+    flex: 0 0 auto;
+}

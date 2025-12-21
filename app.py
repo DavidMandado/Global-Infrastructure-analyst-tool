@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
+import re
 
 # -----------------------------------------------------------------------------
 # App
@@ -43,9 +44,80 @@ df = pd.read_csv("data/CIA_DATA.csv")
 COUNTRY_COL = "Country"
 DEFAULT_METRIC = "Real_GDP_per_Capita_USD" if "Real_GDP_per_Capita_USD" in df.columns else None
 
-# A simple metric dropdown list (numeric columns only)
 numeric_cols = df.select_dtypes(include="number").columns.tolist()
-metric_options = [{"label": c, "value": c} for c in numeric_cols]
+
+def pretty_label(col: str) -> str:
+    s = col.replace("_", " ").strip()
+    s = re.sub(r"\s+", " ", s)
+    acronyms = {"gdp", "usd", "ppp", "co2", "km", "kw"}
+    words = []
+    for w in s.split(" "):
+        if w.lower() in acronyms:
+            words.append(w.upper())
+        else:
+            words.append(w.capitalize())
+    return " ".join(words)
+
+# Labels so the dashboard has nice wording, not the variable names, they dont look very prof.
+LABELS = {
+    "Real_GDP_per_Capita_USD": "GDP per Capita (USD)",
+    "Real_GDP_PPP_billion_USD": "GDP (PPP, $B)",
+    "Unemployment_Rate_percent": "Unemployment Rate (%)",
+    "Youth_Unemployment_Rate_percent": "Youth Unemployment (%)",
+    "Public_Debt_percent_of_GDP": "Public Debt (pct. of GDP)",
+    "electricity_access_percent": "Electricity Access (%)",
+    "electricity_generating_capacity_kW": "Electricity Capacity (kW)",
+    "roadways_km": "Roadways (km)",
+    "railways_km": "Railways (km)",
+    "mobile_cellular_subscriptions_total": "Mobile Subscriptions (total)",
+    "broadband_fixed_subscriptions_total": "Fixed Broadband (total)",
+    "internet_users_total": "Internet Users (total)",
+}
+
+# the following code is to make grouping, since the variables come from different datasets
+# and this way we can keep them classified into demographics, economy, etc.
+GROUP_RULES = [
+    ("Economy", ["gdp", "exports", "imports", "inflation", "debt", "budget", "poverty", "unemployment"]),
+    ("Demographics", ["population", "birth", "death", "median_age", "growth", "literacy", "migration"]),
+    ("Energy", ["electric", "electricity", "coal", "petroleum", "natural_gas", "emissions", "carbon"]),
+    ("Transportation", ["road", "roadways", "rail", "railways", "airport", "airports", "waterway", "pipeline"]),
+    ("Communications", ["mobile", "broadband", "internet", "telephone", "subscriptions"]),
+    ("Other", []),  # fallback bucket
+]
+
+def assign_group(col: str) -> str:
+    lc = col.lower()
+    for group_name, keys in GROUP_RULES:
+        if group_name == "Other":
+            continue
+        if any(k in lc for k in keys):
+            return group_name
+    return "Other"
+
+# Bucket columns into groups
+buckets = {g[0]: [] for g in GROUP_RULES}
+for c in numeric_cols:
+    buckets[assign_group(c)].append(c)
+
+# Sort columns inside each group by their label
+def label_for(c: str) -> str:
+    return LABELS.get(c, pretty_label(c))
+
+for g in buckets:
+    buckets[g] = sorted(buckets[g], key=label_for)
+
+# Build grouped dropdown options Dash expects
+metric_options = []
+for group_name, _ in GROUP_RULES:
+    cols = buckets.get(group_name, [])
+    if not cols:
+        continue
+    metric_options.append({
+        "label": group_name,
+        "options": [{"label": label_for(c), "value": c} for c in cols]
+    })
+
+
 
 if DEFAULT_METRIC is None and numeric_cols:
     DEFAULT_METRIC = numeric_cols[0]
@@ -61,14 +133,39 @@ def make_map(metric: str):
         fig.update_layout(template="infra_dark")
         return fig
 
+    s = pd.to_numeric(df[metric], errors="coerce")
+    s_valid = s.dropna()
+
+    if len(s_valid) == 0:
+        fig = go.Figure()
+        fig.update_layout(template="infra_dark")
+        return fig
+
+    vmin = s_valid.quantile(0.05)
+    vmax = s_valid.quantile(0.95)
+
+    # Safety: if quantiles collapse (almost constant column)
+    if vmin == vmax:
+        vmin = s_valid.min()
+        vmax = s_valid.max()
+
+    
     fig = px.choropleth(
         df,
         locations=COUNTRY_COL,
         locationmode="country names",
         color=metric,
-        color_continuous_scale="Viridis",
+        color_continuous_scale="Viridis",   # can try turbo as well 
+        range_color=[vmin, vmax],  
         template="infra_dark",
     )
+    
+    fig.update_traces(
+        hovertemplate="<b>%{location}</b><br>"
+                    f"{metric}: %{{z}}<br>"
+                    f"Color range: [{vmin:.2f}, {vmax:.2f}] (5–95th pct)<extra></extra>"
+    )
+
 
     # Make it blend into the card and behave like a selector
     fig.update_layout(
@@ -114,18 +211,28 @@ app.layout = html.Div(
                 html.Div(
                     className="panel panel-tight",
                     children=[
-                        html.H3("World Map", className="panel-title"),
                         html.Div(
                             style={"padding": "0 12px 8px 12px"},
                             children=[
                                 dcc.Dropdown(
+                                    id="metric-group",
+                                    className="dark-dropdown",
+                                    options=[{"label": g[0], "value": g[0]} for g in GROUP_RULES if g[0] != "Other"],
+                                    value="Economy",
+                                    clearable=False,
+                                    searchable=False,
+                                ),
+
+                                dcc.Dropdown(
                                     id="map-metric",
-                                    options=metric_options,
+                                    className="dark-dropdown",
+                                    options=[],  # will be filled by callback
                                     value=DEFAULT_METRIC,
                                     clearable=False,
                                     searchable=True,
-                                    placeholder="Select a metric to color the map",
+                                    placeholder="Select the metric of interest.",
                                 )
+
                             ],
                         ),
                         dcc.Graph(
@@ -198,6 +305,24 @@ def update_selected_country(clickData):
         country = clickData["points"][0].get("location", "Unknown")
         return f"Selected country: {country}"
     return "Click a country on the map to see more information."
+
+@app.callback(
+    Output("map-metric", "options"),
+    Output("map-metric", "value"),
+    Input("metric-group", "value"),
+)
+def update_metric_dropdown(group_name):
+    cols = buckets.get(group_name, [])
+    opts = [{"label": label_for(c), "value": c} for c in cols]
+
+    # choose a valid default for that group
+    if DEFAULT_METRIC in cols:
+        val = DEFAULT_METRIC
+    else:
+        val = cols[0] if cols else None
+
+    return opts, val
+
 
 
 if __name__ == "__main__":
