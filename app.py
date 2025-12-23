@@ -167,6 +167,167 @@ def make_map(metric: str):
 
     return fig
 
+def _to_numeric_series(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(series, errors="coerce")
+
+def transform_for_pcp(df_in: pd.DataFrame, cols: list[str], mode: str) -> pd.DataFrame:
+    """
+    Returns a DataFrame with the selected cols transformed for comparability.
+    - pct: percentile (0..1)
+    - z: z-score
+    - log: log10(positive only -> others become NaN)
+    - raw: numeric as-is
+    """
+    out = pd.DataFrame({COUNTRY_COL: df_in[COUNTRY_COL]})
+    for c in cols:
+        s = _to_numeric_series(df_in[c])
+
+        if mode == "pct":
+            # percentile ranks in [0,1]
+            out[c] = s.rank(pct=True)
+        elif mode == "z":
+            mu = s.mean(skipna=True)
+            sd = s.std(skipna=True)
+            out[c] = (s - mu) / (sd if sd and sd > 0 else 1.0)
+        elif mode == "log":
+            out[c] = s.where(s > 0).apply(lambda v: None if pd.isna(v) else __import__("math").log10(v))
+        else:
+            out[c] = s
+
+    return out
+
+def apply_constraints(df_in: pd.DataFrame, constraints: dict) -> pd.DataFrame:
+    """
+    constraints format: {col: constraintrange}
+    constraintrange can be [lo, hi] or list of ranges [[lo, hi], [lo2, hi2]]
+    """
+    if not constraints:
+        return df_in
+
+    d = df_in.copy()
+    for col, cr in constraints.items():
+        if col not in d.columns or cr is None:
+            continue
+
+        s = d[col]
+        if isinstance(cr, list) and len(cr) == 2 and not isinstance(cr[0], list):
+            lo, hi = cr
+            d = d[(s >= lo) & (s <= hi)]
+        elif isinstance(cr, list) and len(cr) > 0 and isinstance(cr[0], list):
+            # union of multiple ranges
+            mask = False
+            for lo, hi in cr:
+                mask = mask | ((s >= lo) & (s <= hi))
+            d = d[mask]
+
+    return d
+
+def parse_pcp_constraints(relayout: dict, dims: list[str]) -> dict:
+    """
+    PCP brush events come via relayoutData with keys like:
+    'dimensions[2].constraintrange': [a,b]
+    """
+    if not relayout:
+        return {}
+
+    constraints = {}
+    for k, v in relayout.items():
+        if "constraintrange" not in k:
+            continue
+        m = re.match(r"dimensions\[(\d+)\]\.constraintrange", k)
+        if not m:
+            continue
+        idx = int(m.group(1))
+        if 0 <= idx < len(dims):
+            constraints[dims[idx]] = v
+    return constraints
+
+def make_pcp(dims: list[str], color_metric: str, scale_mode: str, constraints: dict):
+    """
+    Builds a go.Parcoords PCP (best for interaction + brush).
+    The constraints are applied to compute selected countries, but also shown on axes.
+    """
+    if not dims:
+        fig = go.Figure()
+        fig.update_layout(template="infra_light")
+        return fig, []
+
+    # Transform for comparability
+    td = transform_for_pcp(df, dims + ([color_metric] if color_metric and color_metric not in dims else []), scale_mode)
+
+    # Apply constraints in transformed space
+    td_filtered = apply_constraints(td, constraints)
+    selected_countries = td_filtered[COUNTRY_COL].dropna().tolist()
+
+    # line colors
+    if color_metric and color_metric in td.columns:
+        color_vals = td[color_metric]
+    else:
+        color_vals = td[dims[0]]
+
+    # build dimensions with optional constraintrange
+    dim_objs = []
+    for c in dims:
+        dim = dict(
+            label=label_for(c),
+            values=td[c],
+        )
+        if constraints and c in constraints:
+            dim["constraintrange"] = constraints[c]
+        dim_objs.append(dim)
+
+    fig = go.Figure(
+        data=[
+            go.Parcoords(
+                line=dict(
+                    color=color_vals,
+                    colorscale="Viridis",
+                    showscale=False,
+                ),
+                dimensions=dim_objs,
+                labelfont=dict(color=THEME["text"]),
+                tickfont=dict(color=THEME["muted_text"]),
+            )
+        ]
+    )
+
+    fig.update_layout(
+        template="infra_light",
+        margin=dict(l=20, r=20, t=10, b=10),
+    )
+
+    return fig, selected_countries
+
+def make_map_with_selection(metric: str, selected_countries: list[str]):
+    """
+    Keep the normal (full) choropleth colors exactly like make_map(),
+    and only add an outline on selected countries.
+    """
+    # 1) Start from the original "good looking" map (same scaling, same colors)
+    fig = make_map(metric)
+
+    # 2) If nothing selected, return the normal map
+    if not selected_countries:
+        return fig
+
+    # 3) Add an outline trace for the selected countries (transparent fill)
+    outline = go.Choropleth(
+        locations=selected_countries,
+        locationmode="country names",
+        z=[1] * len(selected_countries),  # dummy values
+        colorscale=[[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0)"]],  # fully transparent fill
+        showscale=False,
+        hoverinfo="skip",
+        marker=dict(
+            line=dict(color="rgba(59,130,246,0.95)", width=2),  # blue outline (change if you want)
+        ),
+    )
+
+    fig.add_trace(outline)
+    return fig
+
+
+
 # -----------------------------------------------------------------------------
 # Layout
 # -----------------------------------------------------------------------------
@@ -223,17 +384,88 @@ app.layout = html.Div(
                     ],
                 ),
 
-                # RIGHT: Main panel placeholder
+                # RIGHT: Main panel = PCP (the “main” dashboard plot)
                 html.Div(
-                    className="panel",
+                    className="panel panel-tight",
                     children=[
-                        html.H3("Global Overview", className="panel-title"),
+
+                        # Stores for linking interactions
+                        dcc.Store(id="pcp-constraints", data={}),
+                        dcc.Store(id="pcp-selected-countries", data=[]),
+
                         html.Div(
-                            "Placeholder: Parallel Coordinates Plot (PCP) will go here.",
-                            className="panel-placeholder",
+                            className="pcp-controls",
+                            children=[
+                                html.Div(
+                                    children=[
+                                        html.Label("PCP metrics (axes)", className="control-label"),
+                                        dcc.Dropdown(
+                                            id="pcp-dims",
+                                            className="light-dropdown",
+                                            options=[{"label": label_for(c), "value": c} for c in numeric_cols],
+                                            value=[c for c in [
+                                                "Real_GDP_per_Capita_USD",
+                                                "Unemployment_Rate_percent",
+                                                "electricity_access_percent",
+                                                "roadways_km",
+                                                "mobile_cellular_subscriptions_total",
+                                            ] if c in df.columns][:5],
+                                            multi=True,
+                                            clearable=False,
+                                            placeholder="Select dimensions…",
+                                        ),
+                                    ],
+                                ),
+
+                                html.Div(
+                                    children=[
+                                        html.Label("Color lines by", className="control-label"),
+                                        dcc.Dropdown(
+                                            id="pcp-color",
+                                            className="light-dropdown",
+                                            options=[{"label": label_for(c), "value": c} for c in numeric_cols],
+                                            value="Real_GDP_per_Capita_USD" if "Real_GDP_per_Capita_USD" in df.columns else (numeric_cols[0] if numeric_cols else None),
+                                            clearable=False,
+                                        ),
+                                    ],
+                                ),
+
+                                html.Div(
+                                    children=[
+                                        html.Label("Scale", className="control-label"),
+                                        dcc.RadioItems(
+                                            id="pcp-scale",
+                                            className="radio-row",
+                                            options=[
+                                                {"label": "Percentile", "value": "pct"},
+                                                {"label": "Z-score", "value": "z"},
+                                                {"label": "Log10", "value": "log"},
+                                                {"label": "Raw", "value": "raw"},
+                                            ],
+                                            value="pct",
+                                            inline=True,
+                                        ),
+                                    ],
+                                ),
+
+                                html.Div(
+                                    className="pcp-actions",
+                                    children=[
+                                        html.Button("Reset selection", id="pcp-reset", n_clicks=0, className="btn"),
+                                        html.Div(id="pcp-status", className="status-pill", children="Selected: all countries"),
+                                    ],
+                                ),
+                            ],
+                        ),
+
+                        dcc.Graph(
+                            id="pcp",
+                            className="panel-content",
+                            config={"displayModeBar": False, "responsive": True},
                         ),
                     ],
                 ),
+
             ],
         ),
 
@@ -271,22 +503,51 @@ def update_metric_dropdown(group_name):
     val = DEFAULT_METRIC if DEFAULT_METRIC in cols else (cols[0] if cols else None)
     return opts, val
 
-@app.callback(
-    Output("world-map", "figure"),
-    Input("map-metric", "value"),
-)
-def update_map(metric):
-    return make_map(metric)
 
 @app.callback(
-    Output("selected-country", "children"),
-    Input("world-map", "clickData"),
+    Output("pcp", "figure"),
+    Output("pcp-selected-countries", "data"),
+    Output("pcp-constraints", "data"),
+    Output("pcp-status", "children"),
+    Output("world-map", "figure"),
+    Input("pcp-dims", "value"),
+    Input("pcp-color", "value"),
+    Input("pcp-scale", "value"),
+    Input("pcp", "relayoutData"),
+    Input("pcp-reset", "n_clicks"),
+    Input("map-metric", "value"),
+    State("pcp-constraints", "data"),
 )
-def update_selected_country(clickData):
-    if clickData and "points" in clickData and clickData["points"]:
-        country = clickData["points"][0].get("location", "Unknown")
-        return f"Selected country: {country}"
-    return "Click a country on the map to see more information."
+def update_pcp_and_map(dims, color_metric, scale_mode, relayout, reset_clicks, map_metric, stored_constraints):
+    # determine what triggered
+    trig = (callback_context.triggered[0]["prop_id"] if callback_context.triggered else "")
+
+    # reset button clears constraints
+    if "pcp-reset" in trig:
+        constraints = {}
+    elif "pcp.relayoutData" in trig:
+        # update constraints from brush events
+        constraints = parse_pcp_constraints(relayout, dims or [])
+        # merge with stored (so constraints persist if multiple axes brushed)
+        merged = dict(stored_constraints or {})
+        merged.update(constraints)
+        constraints = merged
+    else:
+        constraints = stored_constraints or {}
+
+    pcp_fig, selected = make_pcp(dims or [], color_metric, scale_mode, constraints)
+
+    # status text
+    if selected:
+        status = f"Selected: {len(selected)} countries"
+    else:
+        status = "Selected: all countries"
+
+    # linked map highlight
+    map_fig = make_map_with_selection(map_metric, selected)
+
+    return pcp_fig, selected, constraints, status, map_fig
+
 
 if __name__ == "__main__":
     app.run(debug=True)

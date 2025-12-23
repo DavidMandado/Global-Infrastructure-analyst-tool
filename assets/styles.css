@@ -150,8 +150,7 @@ body {
     color: var(--text) !important;
     box-shadow: var(--shadowSoft) !important;
     padding-left: 10px;
-    width: 650px;
-    margin-left: 30px;
+
 }
 
 .light-dropdown .Select-control:hover {
@@ -200,6 +199,59 @@ body {
 
 .light-dropdown .Select-option.is-selected {
     background-color: rgba(59, 130, 246, 0.18) !important;
+}
+
+/* PCP control area */
+.pcp-controls {
+    padding: 10px 12px 8px 12px;
+    display: flex;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+}
+
+.control-label {
+    font-size: 0.85rem;
+    color: var(--muted);
+    display: block;
+    margin: 0 0 6px 0;
+}
+
+.radio-row {
+    padding-top: 4px;
+    color: var(--text);
+}
+
+.pcp-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.btn {
+    background: #111827;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: var(--shadowSoft);
+}
+
+.btn:hover {
+    filter: brightness(1.05);
+}
+
+.status-pill {
+    background: var(--panelAlt);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 8px 10px;
+    font-size: 0.85rem;
 }
 
 /* PCP control area */
