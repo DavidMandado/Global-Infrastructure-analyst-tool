@@ -1,8 +1,19 @@
+:root {
+    --bg: #F6F7FB;
+    --panel: #FFFFFF;
+    --panelAlt: #F3F4F6;
+    --text: #111827;
+    --muted: #6B7280;
+    --border: rgba(17, 24, 39, 0.10);
+    --shadow: 0 8px 24px rgba(17, 24, 39, 0.08);
+    --shadowSoft: 0 4px 14px rgba(17, 24, 39, 0.10);
+}
+
 /* Base page style */
 body {
     margin: 0;
-    background-color: #05060A;
-    color: #F9FAFB;
+    background-color: var(--bg);
+    color: var(--text);
     font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -19,53 +30,53 @@ body {
 .selected-country {
     text-align: center;
     font-size: 1rem;
-    color: #E5E7EB;
+    color: var(--muted);
 }
 
-/* Reusable card/panel */
+/* Card/panel */
 .panel {
-    background-color: #111827;
-    border-radius: 10px;
-    padding: 8px 12px;
+    background-color: var(--panel);
+    border-radius: 14px;
+    padding-left: 10px;
+    padding-right: 10px;
     display: flex;
     flex-direction: column;
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
 }
 
-/* Optional: flush panel for full-bleed plots (map) */
+/* Full-bleed panel (map) */
 .panel-tight {
+    display: flex;
+    /* important */
+    flex-direction: column;
     padding: 0;
     overflow: hidden;
-    /* ensures plot respects rounded corners */
 }
 
 /* Panel title */
 .panel-title {
-    margin: 8px 12px 6px 12px;
-    /* looks good even in panel-tight */
+    margin: 10px 12px 8px 12px;
     font-size: 0.95rem;
-    font-weight: 600;
+    font-weight: 650;
+    color: var(--text);
 }
 
-/* If panel is tight, remove extra title padding so it aligns nicely */
-.panel-tight .panel-title {
-    margin: 10px 12px 6px 12px;
-}
-
-/* Plot container inside a panel */
+/* Plot container inside panel */
 .panel-content {
     flex: 1 1 auto;
     min-height: 0;
-    /* critical for Plotly sizing inside flex containers */
+    /* critical for plot sizing */
 }
 
-/* Placeholder content */
+/* Placeholder */
 .panel-placeholder {
     flex: 1 1 auto;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #9CA3AF;
-    font-size: 0.9rem;
+    color: var(--muted);
+    font-size: 0.95rem;
 }
 
 /* Top row: map + side panel */
@@ -73,23 +84,19 @@ body {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
-
-    height: 45vh;
+    height: 65vh;
     min-height: 360px;
     max-height: 520px;
+    align-items: stretch;
+    /* important */
 }
 
-/* Make the two top panels fill the row height */
-.top-row .panel {
+.top-row>.panel {
     height: 100%;
 }
 
-/* Ensure Plotly graph fills available space */
-.top-row .panel-content {
-    height: 100%;
-}
 
-/* Lower grid: 3 columns x 2 rows */
+/* Lower grid */
 .app-grid2 {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -97,14 +104,25 @@ body {
     gap: 12px;
 }
 
-/* Plotly background: keep transparent so it blends with the panel */
+/* Map controls container */
+.map-controls {
+    flex: 0 0 auto;
+    padding-top: 10px;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+}
+
+/* Make Plotly blend */
 .js-plotly-plot,
 .plot-container,
 .svg-container {
-    background: transparent !important;
+    background: var(--panel) !important;
 }
 
-/* Responsive: stack top row on small screens */
+/* Responsive stacking */
 @media (max-width: 900px) {
     .top-row {
         grid-template-columns: 1fr;
@@ -121,87 +139,118 @@ body {
     }
 }
 
-/* dropdown styling */
+/* -------------------------------------------------------------------------- */
+/* Light dropdown styling (react-select)                                       */
+/* -------------------------------------------------------------------------- */
 
-/* ---- Dark dropdown (dcc.Dropdown uses react-select) ---- */
-.dark-dropdown .Select-control {
-    background-color: #020617 !important;
-    /* panel_alt */
-    border: 1px solid rgba(255, 255, 255, 0.12) !important;
-    border-radius: 8px !important;
-    color: #F9FAFB !important;
-    /* text */
-    box-shadow: none !important;
+.light-dropdown .Select-control {
+    background-color: var(--panelAlt) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important;
+    color: var(--text) !important;
+    box-shadow: var(--shadowSoft) !important;
+    padding-left: 10px;
+    width: 650px;
+    margin-left: 30px;
 }
 
-.dark-dropdown .Select-control:hover {
-    border-color: rgba(255, 255, 255, 0.22) !important;
+.light-dropdown .Select-control:hover {
+    border-color: rgba(17, 24, 39, 0.18) !important;
 }
 
-.dark-dropdown .Select-value-label {
-    color: #F9FAFB !important;
+.light-dropdown .Select-value-label {
+    color: var(--text) !important;
 }
 
-.dark-dropdown .Select-placeholder {
-    color: #9CA3AF !important;
-    /* muted_text */
+.light-dropdown .Select-placeholder {
+    color: var(--muted) !important;
 }
 
-.dark-dropdown .Select-input>input {
-    color: #F9FAFB !important;
+.light-dropdown .Select-input>input {
+    color: var(--text) !important;
 }
 
-/* Dropdown arrow */
-.dark-dropdown .Select-arrow {
-    border-color: #9CA3AF transparent transparent !important;
+.light-dropdown .Select-arrow {
+    border-color: var(--muted) transparent transparent !important;
 }
 
-.dark-dropdown .is-open .Select-arrow {
-    border-color: transparent transparent #9CA3AF !important;
+.light-dropdown .is-open .Select-arrow {
+    border-color: transparent transparent var(--muted) !important;
 }
 
-/* The dropdown menu panel */
-.dark-dropdown .Select-menu-outer {
-    background-color: #020617 !important;
-    border: 1px solid rgba(255, 255, 255, 0.12) !important;
-    border-radius: 8px !important;
+.light-dropdown .Select-menu-outer {
+    background-color: var(--panel) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 12px !important;
     margin-top: 6px !important;
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35) !important;
+    margin-left: 5px;
+    margin-right: 5px;
+    margin-bottom: 6px;
+    box-shadow: var(--shadow) !important;
 }
 
-/* Each option */
-.dark-dropdown .Select-option {
-    background-color: #020617 !important;
-    color: #F9FAFB !important;
+.light-dropdown .Select-option {
+    background-color: var(--panel) !important;
+    color: var(--text) !important;
 }
 
-/* Hovered option */
-.dark-dropdown .Select-option.is-focused {
-    background-color: rgba(34, 197, 94, 0.12) !important;
-    /* accent tint */
-    color: #F9FAFB !important;
+.light-dropdown .Select-option.is-focused {
+    background-color: rgba(59, 130, 246, 0.10) !important;
 }
 
-/* Selected option */
-.dark-dropdown .Select-option.is-selected {
-    background-color: rgba(34, 197, 94, 0.22) !important;
-    color: #F9FAFB !important;
+.light-dropdown .Select-option.is-selected {
+    background-color: rgba(59, 130, 246, 0.18) !important;
 }
 
-/* If you use multi dropdown later (chips) */
-.dark-dropdown .Select--multi .Select-value {
-    background-color: rgba(34, 197, 94, 0.18) !important;
-    border: 1px solid rgba(34, 197, 94, 0.35) !important;
-    color: #F9FAFB !important;
+/* PCP control area */
+.pcp-controls {
+    padding: 10px 12px 8px 12px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
 }
 
-.dark-dropdown .Select--multi .Select-value-icon {
-    border-right: 1px solid rgba(34, 197, 94, 0.25) !important;
-    color: #F9FAFB !important;
+.control-label {
+    font-size: 0.85rem;
+    color: var(--muted);
+    display: block;
+    margin: 0 0 6px 0;
 }
 
-/* dropdown stykling end */
+.radio-row {
+    padding-top: 4px;
+    color: var(--text);
+}
 
-.panel-tight .panel-content {
-    flex: 0 0 auto;
+.pcp-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.btn {
+    background: #111827;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: var(--shadowSoft);
+}
+
+.btn:hover {
+    filter: brightness(1.05);
+}
+
+.status-pill {
+    background: var(--panelAlt);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 8px 10px;
+    font-size: 0.85rem;
 }

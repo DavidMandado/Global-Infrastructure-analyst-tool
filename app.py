@@ -1,4 +1,4 @@
-from dash import Dash, html, dcc, Input, Output
+from dash import Dash, html, dcc, Input, Output, State, callback_context
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -11,17 +11,18 @@ import re
 app = Dash(__name__)
 
 THEME = {
-    "background": "#05060A",
-    "panel": "#111827",
-    "panel_alt": "#020617",
-    "text": "#F9FAFB",
-    "muted_text": "#9CA3AF",
+    "background": "#F6F7FB",   # page background (very light gray)
+    "panel": "#FFFFFF",        # card background
+    "panel_alt": "#F3F4F6",    # subtle alt background
+    "text": "#111827",         # near-black text
+    "muted_text": "#6B7280",   # gray text
+    "border": "rgba(17,24,39,0.10)",
 }
 
 # -----------------------------------------------------------------------------
-# Plotly theme/template (keeps visuals consistent across all future plots)
+# Plotly template (light)
 # -----------------------------------------------------------------------------
-pio.templates["infra_dark"] = go.layout.Template(
+pio.templates["infra_light"] = go.layout.Template(
     layout=dict(
         paper_bgcolor=THEME["panel"],
         plot_bgcolor=THEME["panel"],
@@ -34,7 +35,7 @@ pio.templates["infra_dark"] = go.layout.Template(
         legend=dict(bgcolor="rgba(0,0,0,0)"),
     )
 )
-pio.templates.default = "infra_dark"
+pio.templates.default = "infra_light"
 
 # -----------------------------------------------------------------------------
 # Data
@@ -43,7 +44,6 @@ df = pd.read_csv("data/CIA_DATA.csv")
 
 COUNTRY_COL = "Country"
 DEFAULT_METRIC = "Real_GDP_per_Capita_USD" if "Real_GDP_per_Capita_USD" in df.columns else None
-
 numeric_cols = df.select_dtypes(include="number").columns.tolist()
 
 def pretty_label(col: str) -> str:
@@ -58,13 +58,12 @@ def pretty_label(col: str) -> str:
             words.append(w.capitalize())
     return " ".join(words)
 
-# Labels so the dashboard has nice wording, not the variable names, they dont look very prof.
 LABELS = {
     "Real_GDP_per_Capita_USD": "GDP per Capita (USD)",
     "Real_GDP_PPP_billion_USD": "GDP (PPP, $B)",
     "Unemployment_Rate_percent": "Unemployment Rate (%)",
     "Youth_Unemployment_Rate_percent": "Youth Unemployment (%)",
-    "Public_Debt_percent_of_GDP": "Public Debt (pct. of GDP)",
+    "Public_Debt_percent_of_GDP": "Public Debt (% of GDP)",
     "electricity_access_percent": "Electricity Access (%)",
     "electricity_generating_capacity_kW": "Electricity Capacity (kW)",
     "roadways_km": "Roadways (km)",
@@ -74,15 +73,13 @@ LABELS = {
     "internet_users_total": "Internet Users (total)",
 }
 
-# the following code is to make grouping, since the variables come from different datasets
-# and this way we can keep them classified into demographics, economy, etc.
 GROUP_RULES = [
     ("Economy", ["gdp", "exports", "imports", "inflation", "debt", "budget", "poverty", "unemployment"]),
     ("Demographics", ["population", "birth", "death", "median_age", "growth", "literacy", "migration"]),
     ("Energy", ["electric", "electricity", "coal", "petroleum", "natural_gas", "emissions", "carbon"]),
     ("Transportation", ["road", "roadways", "rail", "railways", "airport", "airports", "waterway", "pipeline"]),
     ("Communications", ["mobile", "broadband", "internet", "telephone", "subscriptions"]),
-    ("Other", []),  # fallback bucket
+    ("Other", []),
 ]
 
 def assign_group(col: str) -> str:
@@ -94,30 +91,16 @@ def assign_group(col: str) -> str:
             return group_name
     return "Other"
 
+def label_for(c: str) -> str:
+    return LABELS.get(c, pretty_label(c))
+
 # Bucket columns into groups
 buckets = {g[0]: [] for g in GROUP_RULES}
 for c in numeric_cols:
     buckets[assign_group(c)].append(c)
 
-# Sort columns inside each group by their label
-def label_for(c: str) -> str:
-    return LABELS.get(c, pretty_label(c))
-
 for g in buckets:
     buckets[g] = sorted(buckets[g], key=label_for)
-
-# Build grouped dropdown options Dash expects
-metric_options = []
-for group_name, _ in GROUP_RULES:
-    cols = buckets.get(group_name, [])
-    if not cols:
-        continue
-    metric_options.append({
-        "label": group_name,
-        "options": [{"label": label_for(c), "value": c} for c in cols]
-    })
-
-
 
 if DEFAULT_METRIC is None and numeric_cols:
     DEFAULT_METRIC = numeric_cols[0]
@@ -126,54 +109,48 @@ if DEFAULT_METRIC is None and numeric_cols:
 # Figure builder
 # -----------------------------------------------------------------------------
 def make_map(metric: str):
-    """Create a choropleth map for the given metric."""
     if not metric or metric not in df.columns:
-        # empty figure fallback
         fig = go.Figure()
-        fig.update_layout(template="infra_dark")
+        fig.update_layout(template="infra_light")
         return fig
 
     s = pd.to_numeric(df[metric], errors="coerce")
     s_valid = s.dropna()
-
     if len(s_valid) == 0:
         fig = go.Figure()
-        fig.update_layout(template="infra_dark")
+        fig.update_layout(template="infra_light")
         return fig
 
     vmin = s_valid.quantile(0.05)
     vmax = s_valid.quantile(0.95)
-
-    # Safety: if quantiles collapse (almost constant column)
     if vmin == vmax:
         vmin = s_valid.min()
         vmax = s_valid.max()
 
-    
     fig = px.choropleth(
         df,
         locations=COUNTRY_COL,
         locationmode="country names",
         color=metric,
-        color_continuous_scale="Viridis",   # can try turbo as well 
-        range_color=[vmin, vmax],  
-        template="infra_dark",
+        color_continuous_scale="Viridis",
+        range_color=[vmin, vmax],
+        template="infra_light",
     )
-    
+
     fig.update_traces(
         hovertemplate="<b>%{location}</b><br>"
-                    f"{metric}: %{{z}}<br>"
-                    f"Color range: [{vmin:.2f}, {vmax:.2f}] (5–95th pct)<extra></extra>"
+                      f"{label_for(metric)}: %{{z}}<br>"
+                      f"Color range: [{vmin:.2f}, {vmax:.2f}] (5–95th pct)<extra></extra>",
+        marker_line_width=0
     )
 
-
-    # Make it blend into the card and behave like a selector
     fig.update_layout(
         coloraxis_showscale=False,
         showlegend=False,
         dragmode="zoom",
         margin=dict(l=0, r=0, t=0, b=0),
     )
+
     fig.update_geos(
         bgcolor=THEME["panel"],
         showocean=True,
@@ -182,14 +159,13 @@ def make_map(metric: str):
         landcolor=THEME["panel_alt"],
         showframe=False,
         showcountries=True,
-        countrycolor="rgba(255,255,255,0.12)",
+        countrycolor="rgba(17,24,39,0.10)",
         projection_type="equirectangular",
         projection_scale=1.65,
         center=dict(lat=20, lon=0),
     )
-    fig.update_traces(marker_line_width=0)
-    return fig
 
+    return fig
 
 # -----------------------------------------------------------------------------
 # Layout
@@ -203,7 +179,6 @@ app.layout = html.Div(
             children="Click a country on the map to see more information.",
         ),
 
-        # Top row: map + main panel
         html.Div(
             className="top-row",
             children=[
@@ -212,27 +187,25 @@ app.layout = html.Div(
                     className="panel panel-tight",
                     children=[
                         html.Div(
-                            style={"padding": "0 12px 8px 12px"},
+                            className="map-controls",
                             children=[
                                 dcc.Dropdown(
                                     id="metric-group",
-                                    className="dark-dropdown",
+                                    className="light-dropdown",
                                     options=[{"label": g[0], "value": g[0]} for g in GROUP_RULES if g[0] != "Other"],
                                     value="Economy",
                                     clearable=False,
                                     searchable=False,
                                 ),
-
                                 dcc.Dropdown(
                                     id="map-metric",
-                                    className="dark-dropdown",
-                                    options=[],  # will be filled by callback
+                                    className="light-dropdown",
+                                    options=[],
                                     value=DEFAULT_METRIC,
                                     clearable=False,
                                     searchable=True,
-                                    placeholder="Select the metric of interest.",
-                                )
-
+                                    placeholder="Select a metric…",
+                                ),
                             ],
                         ),
                         dcc.Graph(
@@ -244,13 +217,13 @@ app.layout = html.Div(
                                 "displayModeBar": False,
                                 "scrollZoom": True,
                                 "doubleClick": "reset",
-                                "responsive": True,
+                                "responsive": False,  # Change from True to False
                             },
                         ),
                     ],
                 ),
 
-                # RIGHT: Main panel (placeholder for PCP)
+                # RIGHT: Main panel placeholder
                 html.Div(
                     className="panel",
                     children=[
@@ -264,7 +237,6 @@ app.layout = html.Div(
             ],
         ),
 
-        # Lower grid: placeholders
         html.Div(
             className="app-grid2",
             children=[
@@ -289,12 +261,22 @@ app.layout = html.Div(
 # Callbacks
 # -----------------------------------------------------------------------------
 @app.callback(
+    Output("map-metric", "options"),
+    Output("map-metric", "value"),
+    Input("metric-group", "value"),
+)
+def update_metric_dropdown(group_name):
+    cols = buckets.get(group_name, [])
+    opts = [{"label": label_for(c), "value": c} for c in cols]
+    val = DEFAULT_METRIC if DEFAULT_METRIC in cols else (cols[0] if cols else None)
+    return opts, val
+
+@app.callback(
     Output("world-map", "figure"),
     Input("map-metric", "value"),
 )
 def update_map(metric):
     return make_map(metric)
-
 
 @app.callback(
     Output("selected-country", "children"),
@@ -305,25 +287,6 @@ def update_selected_country(clickData):
         country = clickData["points"][0].get("location", "Unknown")
         return f"Selected country: {country}"
     return "Click a country on the map to see more information."
-
-@app.callback(
-    Output("map-metric", "options"),
-    Output("map-metric", "value"),
-    Input("metric-group", "value"),
-)
-def update_metric_dropdown(group_name):
-    cols = buckets.get(group_name, [])
-    opts = [{"label": label_for(c), "value": c} for c in cols]
-
-    # choose a valid default for that group
-    if DEFAULT_METRIC in cols:
-        val = DEFAULT_METRIC
-    else:
-        val = cols[0] if cols else None
-
-    return opts, val
-
-
 
 if __name__ == "__main__":
     app.run(debug=True)
