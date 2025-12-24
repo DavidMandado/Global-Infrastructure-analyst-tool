@@ -441,6 +441,9 @@ def make_opp_risk_scatter(x_metric: str, y_metric: str, selected_countries: list
             )
 
     fig = card_layout(fig, x_title=label_for(x_metric), y_title=label_for(y_metric))
+    
+    fig.update_traces(marker=dict(line=dict(width=0)))
+
     return fig
 
 
@@ -694,7 +697,8 @@ app.layout = html.Div(
 
                                 html.Div(
                                     children=[
-                                        html.Label("Color lines by", className="control-label"),
+                                        html.Label("Color variable:", className="control-label"),
+                                        html.Div("*The variable selected for color is the variable set for the color scale in the plots below as well.", className='control-label'),
                                         dcc.Dropdown(
                                             id="pcp-color",
                                             className="light-dropdown",
