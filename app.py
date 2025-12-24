@@ -431,6 +431,7 @@ app.layout = html.Div(
                                 ),
 
                                 html.Div(
+                                    className="pcp-scale",
                                     children=[
                                         html.Label("Scale", className="control-label"),
                                         dcc.RadioItems(
@@ -447,6 +448,7 @@ app.layout = html.Div(
                                         ),
                                     ],
                                 ),
+
 
                                 html.Div(
                                     className="pcp-actions",

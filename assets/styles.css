@@ -153,6 +153,7 @@ body {
 
 }
 
+
 .light-dropdown .Select-control:hover {
     border-color: rgba(17, 24, 39, 0.18) !important;
 }
@@ -205,17 +206,23 @@ body {
 .pcp-controls {
     padding: 10px 12px 8px 12px;
     display: flex;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
     gap: 10px 12px;
     border-bottom: 1px solid var(--border);
     background: var(--panel);
+    gap: 8px;
+    padding: 8px 10px 6px 10px;
+}
+
+.pcp-controls .pcp-scale {
+    grid-column: 1 / -1;
 }
 
 .control-label {
     font-size: 0.85rem;
     color: var(--muted);
     display: block;
-    margin: 0 0 6px 0;
+    margin: 0 0 4px 0;
 }
 
 .radio-row {
