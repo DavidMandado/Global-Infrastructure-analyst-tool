@@ -326,6 +326,132 @@ def make_map_with_selection(metric: str, selected_countries: list[str]):
     fig.add_trace(outline)
     return fig
 
+def make_opp_risk_scatter(x_metric: str, y_metric: str, selected_countries: list[str]):
+    d = df[[COUNTRY_COL, x_metric, y_metric]].copy()
+    d[x_metric] = pd.to_numeric(d[x_metric], errors="coerce")
+    d[y_metric] = pd.to_numeric(d[y_metric], errors="coerce")
+    d = d.dropna()
+
+    fig = px.scatter(
+        d,
+        x=x_metric,
+        y=y_metric,
+        hover_name=COUNTRY_COL,
+        labels={
+            x_metric: label_for(x_metric),
+            y_metric: label_for(y_metric),
+        },
+        template="infra_light",
+    )
+
+    fig.update_traces(
+        marker=dict(
+            size=8,
+            opacity=0.75,
+            line=dict(width=0),
+        ),
+        hovertemplate="<b>%{hovertext}</b><br>"
+                      f"{label_for(x_metric)}: %{{x}}<br>"
+                      f"{label_for(y_metric)}: %{{y}}<extra></extra>",
+    )
+
+    # Highlight selected countries
+    if selected_countries:
+        fig.add_trace(
+            go.Scatter(
+                x=d[d[COUNTRY_COL].isin(selected_countries)][x_metric],
+                y=d[d[COUNTRY_COL].isin(selected_countries)][y_metric],
+                mode="markers",
+                marker=dict(size=12, color="rgba(59,130,246,0.9)"),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+    fig.update_layout(margin=dict(l=10, r=10, t=10, b=10))
+    return fig
+
+def make_ranked_bar(metric: str, selected_countries: list[str], top_n=10):
+    s = pd.to_numeric(df[metric], errors="coerce")
+    d = df[[COUNTRY_COL]].copy()
+    d["value"] = s
+    d = d.dropna().sort_values("value", ascending=False)
+
+    top = d.head(top_n)
+    bottom = d.tail(top_n)
+
+    plot_df = pd.concat([top, bottom])
+
+    fig = px.bar(
+        plot_df,
+        x="value",
+        y=COUNTRY_COL,
+        orientation="h",
+        template="infra_light",
+        labels={"value": label_for(metric), COUNTRY_COL: ""},
+    )
+
+    fig.update_traces(
+        marker_color=[
+            "rgba(59,130,246,0.9)" if c in selected_countries else "rgba(17,24,39,0.35)"
+            for c in plot_df[COUNTRY_COL]
+        ],
+        hovertemplate="<b>%{y}</b><br>"
+                      f"{label_for(metric)}: %{{x}}<extra></extra>",
+    )
+
+    fig.update_layout(
+        yaxis=dict(autorange="reversed"),
+        margin=dict(l=10, r=10, t=10, b=10),
+    )
+    return fig
+
+
+def make_distribution(metric: str, selected_country: str | None):
+    s = pd.to_numeric(df[metric], errors="coerce").dropna()
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Histogram(
+            x=s,
+            nbinsx=30,
+            marker_color="rgba(17,24,39,0.35)",
+            hovertemplate=f"{label_for(metric)} range<br>Count: %{{y}}<extra></extra>",
+        )
+    )
+
+    # Median & quartiles
+    for q, name in zip([0.25, 0.5, 0.75], ["Q1", "Median", "Q3"]):
+        fig.add_vline(
+            x=s.quantile(q),
+            line_width=1,
+            line_dash="dot",
+            line_color=THEME["muted_text"],
+        )
+
+    # Selected country marker
+    if selected_country:
+        val = pd.to_numeric(
+            df.loc[df[COUNTRY_COL] == selected_country, metric],
+            errors="coerce"
+        ).iloc[0]
+
+        if pd.notna(val):
+            fig.add_vline(
+                x=val,
+                line_width=2,
+                line_color="rgba(59,130,246,0.95)",
+            )
+
+    fig.update_layout(
+        template="infra_light",
+        showlegend=False,
+        margin=dict(l=10, r=10, t=10, b=10),
+        xaxis_title=label_for(metric),
+        yaxis_title="Countries",
+    )
+    return fig
 
 
 # -----------------------------------------------------------------------------
@@ -472,22 +598,66 @@ app.layout = html.Div(
         ),
 
         html.Div(
-            className="app-grid2",
-            children=[
-                html.Div(className="panel", children=[html.H3("View 1", className="panel-title"),
-                                                      html.Div("Placeholder", className="panel-placeholder")]),
-                html.Div(className="panel", children=[html.H3("View 2", className="panel-title"),
-                                                      html.Div("Placeholder", className="panel-placeholder")]),
-                html.Div(className="panel", children=[html.H3("View 3", className="panel-title"),
-                                                      html.Div("Placeholder", className="panel-placeholder")]),
-                html.Div(className="panel", children=[html.H3("View 4", className="panel-title"),
-                                                      html.Div("Placeholder", className="panel-placeholder")]),
-                html.Div(className="panel", children=[html.H3("View 5", className="panel-title"),
-                                                      html.Div("Placeholder", className="panel-placeholder")]),
-                html.Div(className="panel", children=[html.H3("View 6", className="panel-title"),
-                                                      html.Div("Placeholder", className="panel-placeholder")]),
-            ],
-        ),
+        className="app-grid2",
+        children=[
+
+            # ----------------------------------------------------------
+            # GLOBAL INVESTOR SUMMARY (3-across row)
+            # ----------------------------------------------------------
+            html.Div(
+                className="summary-row",
+                children=[
+                    html.Div(
+                        className="panel",
+                        children=[
+                            html.Div("Opportunity vs Risk (Global)", className="panel-title"),
+                            dcc.Graph(
+                                id="opp-risk-scatter",
+                                className="panel-content",
+                                config={"displayModeBar": False},
+                            ),
+                        ],
+                    ),
+
+                    html.Div(
+                        className="panel",
+                        children=[
+                            html.Div("Top / Bottom Countries", className="panel-title"),
+                            dcc.Graph(
+                                id="ranked-bar",
+                                className="panel-content",
+                                config={"displayModeBar": False},
+                            ),
+                        ],
+                    ),
+
+                    html.Div(
+                        className="panel",
+                        children=[
+                            html.Div("Global Distribution Context", className="panel-title"),
+                            dcc.Graph(
+                                id="metric-distribution",
+                                className="panel-content",
+                                config={"displayModeBar": False},
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+
+            # ----------------------------------------------------------
+            # EXISTING PANELS (leave untouched)
+            # ----------------------------------------------------------
+            html.Div(className="panel", children=[html.H3("View 4", className="panel-title"),
+                                                html.Div("Placeholder", className="panel-placeholder")]),
+            html.Div(className="panel", children=[html.H3("View 5", className="panel-title"),
+                                                html.Div("Placeholder", className="panel-placeholder")]),
+            html.Div(className="panel", children=[html.H3("View 6", className="panel-title"),
+                                                html.Div("Placeholder", className="panel-placeholder")]),
+        ],
+)
+
+
     ],
 )
 
@@ -549,6 +719,30 @@ def update_pcp_and_map(dims, color_metric, scale_mode, relayout, reset_clicks, m
     map_fig = make_map_with_selection(map_metric, selected)
 
     return pcp_fig, selected, constraints, status, map_fig
+
+@app.callback(
+    Output("opp-risk-scatter", "figure"),
+    Output("ranked-bar", "figure"),
+    Output("metric-distribution", "figure"),
+    Input("map-metric", "value"),
+    Input("pcp-selected-countries", "data"),
+    Input("world-map", "clickData"),
+)
+def update_global_summary(metric, selected_countries, map_click):
+    # Define proxies (can later be user-selectable)
+    opportunity_metric = metric
+    risk_metric = "Public_Debt_percent_of_GDP" if "Public_Debt_percent_of_GDP" in df.columns else metric
+
+    selected_country = None
+    if map_click:
+        selected_country = map_click["points"][0]["location"]
+
+    scatter = make_opp_risk_scatter(opportunity_metric, risk_metric, selected_countries)
+    bars = make_ranked_bar(metric, selected_countries)
+    dist = make_distribution(metric, selected_country)
+
+    return scatter, bars, dist
+
 
 
 if __name__ == "__main__":

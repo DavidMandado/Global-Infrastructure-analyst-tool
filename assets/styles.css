@@ -313,3 +313,29 @@ body {
     padding: 8px 10px;
     font-size: 0.85rem;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Global investor summary row                                                 */
+/* -------------------------------------------------------------------------- */
+.summary-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+
+/* Optional: switch to 2 per row if needed */
+@media (max-width: 1200px) {
+    .summary-row {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 700px) {
+    .summary-row {
+        grid-template-columns: 1fr;
+    }
+}
+
+.summary-row {
+    grid-column: 1 / -1;
+}
