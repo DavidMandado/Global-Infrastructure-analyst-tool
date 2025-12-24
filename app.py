@@ -369,6 +369,13 @@ def make_opp_risk_scatter(x_metric: str, y_metric: str, selected_countries: list
         )
 
     fig.update_layout(margin=dict(l=10, r=10, t=10, b=10))
+    
+    fig = card_layout(
+        fig,
+        x_title=label_for(x_metric),
+        y_title=label_for(y_metric),
+    )
+
     return fig
 
 def make_ranked_bar(metric: str, selected_countries: list[str], top_n=10):
@@ -401,9 +408,15 @@ def make_ranked_bar(metric: str, selected_countries: list[str], top_n=10):
     )
 
     fig.update_layout(
-        yaxis=dict(autorange="reversed"),
-        margin=dict(l=10, r=10, t=10, b=10),
+        xaxis=dict(tickfont=dict(size=11)),
+        yaxis=dict(tickfont=dict(size=11)),
     )
+
+    fig = card_layout(
+        fig,
+        x_title=label_for(metric),
+    )
+
     return fig
 
 
@@ -451,6 +464,59 @@ def make_distribution(metric: str, selected_country: str | None):
         xaxis_title=label_for(metric),
         yaxis_title="Countries",
     )
+    
+    fig = card_layout(
+        fig,
+        x_title=label_for(metric),
+        y_title="Countries",
+    )
+
+    return fig
+
+def card_layout(fig, *, x_title=None, y_title=None):
+    fig.update_layout(
+        margin=dict(l=48, r=16, t=8, b=40),  # tuned for your panel size
+        xaxis=dict(
+            title=None,
+            tickfont=dict(size=11),
+        ),
+        yaxis=dict(
+            title=None,
+            tickfont=dict(size=11),
+        ),
+    )
+
+    # Subtle axis labels as annotations (optional but recommended)
+    annotations = []
+
+    if x_title:
+        annotations.append(
+            dict(
+                text=x_title,
+                x=0.5,
+                y=-0.18,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font=dict(size=11, color=THEME["muted_text"]),
+            )
+        )
+
+    if y_title:
+        annotations.append(
+            dict(
+                text=y_title,
+                x=-0.12,
+                y=0.5,
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                textangle=-90,
+                font=dict(size=11, color=THEME["muted_text"]),
+            )
+        )
+
+    fig.update_layout(annotations=annotations)
     return fig
 
 
@@ -504,7 +570,7 @@ app.layout = html.Div(
                                 "displayModeBar": False,
                                 "scrollZoom": True,
                                 "doubleClick": "reset",
-                                "responsive": False,  # Change from True to False
+                                "responsive": True,
                             },
                         ),
                     ],
@@ -614,7 +680,7 @@ app.layout = html.Div(
                             dcc.Graph(
                                 id="opp-risk-scatter",
                                 className="panel-content",
-                                config={"displayModeBar": False},
+                                config={"displayModeBar": False, "responsive": True},
                             ),
                         ],
                     ),
@@ -626,7 +692,7 @@ app.layout = html.Div(
                             dcc.Graph(
                                 id="ranked-bar",
                                 className="panel-content",
-                                config={"displayModeBar": False},
+                                config={"displayModeBar": False, "responsive": True},
                             ),
                         ],
                     ),
@@ -638,16 +704,14 @@ app.layout = html.Div(
                             dcc.Graph(
                                 id="metric-distribution",
                                 className="panel-content",
-                                config={"displayModeBar": False},
+                                config={"displayModeBar": False, "responsive": True},
                             ),
                         ],
                     ),
                 ],
             ),
 
-            # ----------------------------------------------------------
-            # EXISTING PANELS (leave untouched)
-            # ----------------------------------------------------------
+
             html.Div(className="panel", children=[html.H3("View 4", className="panel-title"),
                                                 html.Div("Placeholder", className="panel-placeholder")]),
             html.Div(className="panel", children=[html.H3("View 5", className="panel-title"),
