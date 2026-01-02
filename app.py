@@ -999,7 +999,58 @@ def toggle_dashboard_views(country):
     )
 
 
+@app.callback(
+    Output("country-econ", "figure"),
+    Output("country-labor", "figure"),
+    Output("country-infra", "figure"),
+    Output("country-rank", "figure"),
+    Input("active-country", "data"),
+)
+def update_country_dashboard(country):
+    empty = go.Figure().update_layout(template="infra_light")
 
+    if not country:
+        return empty, empty, empty, empty
+
+    row = df[df[COUNTRY_COL] == country]
+    if row.empty:
+        return empty, empty, empty, empty
+
+    row = row.iloc[0]
+
+    econ_fig = go.Figure(
+        go.Bar(
+            x=["GDP per Capita", "Public Debt"],
+            y=[
+                row.get("Real_GDP_per_Capita_USD"),
+                row.get("Public_Debt_percent_of_GDP"),
+            ],
+        )
+    ).update_layout(template="infra_light")
+
+    labor_fig = go.Figure(
+        go.Bar(
+            x=["Unemployment", "Youth Unemployment"],
+            y=[
+                row.get("Unemployment_Rate_percent"),
+                row.get("Youth_Unemployment_Rate_percent"),
+            ],
+        )
+    ).update_layout(template="infra_light")
+
+    infra_fig = go.Figure(
+        go.Bar(
+            x=["Electricity Access", "Roadways"],
+            y=[
+                row.get("electricity_access_percent"),
+                row.get("roadways_km"),
+            ],
+        )
+    ).update_layout(template="infra_light")
+
+    rank_fig = make_ranked_bar("Real_GDP_per_Capita_USD", [country])
+
+    return econ_fig, labor_fig, infra_fig, rank_fig
 
 
 if __name__ == "__main__":
