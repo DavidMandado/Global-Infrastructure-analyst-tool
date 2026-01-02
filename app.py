@@ -617,210 +617,265 @@ app.layout = html.Div(
             className="selected-country",
             children="Click a country on the map to see more information.",
         ),
+        dcc.Store(id="active-country", data=None),
 
         html.Div(
-            className="top-row",
+            id="global-view",
             children=[
-                # LEFT: Map panel
-                html.Div(
-                    className="panel panel-tight",
-                    children=[
-                        html.Div(
-                            className="map-controls",
-                            children=[
-                                dcc.Dropdown(
-                                    id="metric-group",
-                                    className="light-dropdown",
-                                    options=[{"label": g[0], "value": g[0]} for g in GROUP_RULES if g[0] != "Other"],
-                                    value="Economy",
-                                    clearable=False,
-                                    searchable=False,
-                                ),
-                                dcc.Dropdown(
-                                    id="map-metric",
-                                    className="light-dropdown",
-                                    options=[],
-                                    value=DEFAULT_METRIC,
-                                    clearable=False,
-                                    searchable=True,
-                                    placeholder="Select a metric…",
-                                ),
-                            ],
-                        ),
-                        dcc.Graph(
-                            id="world-map",
-                            className="panel-content",
-                            figure=make_map(DEFAULT_METRIC),
-                            style={"height": "100%", "width": "100%"},
-                            config={
-                                "displayModeBar": False,
-                                "scrollZoom": True,
-                                "doubleClick": "reset",
-                                "responsive": True,
-                            },
-                        ),
-                    ],
-                ),
+            html.Div(
+                className="top-row",
+                children=[
+                    # LEFT: Map panel
+                    html.Div(
+                        className="panel panel-tight",
+                        children=[
+                            html.Div(
+                                className="map-controls",
+                                children=[
+                                    dcc.Dropdown(
+                                        id="metric-group",
+                                        className="light-dropdown",
+                                        options=[{"label": g[0], "value": g[0]} for g in GROUP_RULES if g[0] != "Other"],
+                                        value="Economy",
+                                        clearable=False,
+                                        searchable=False,
+                                    ),
+                                    dcc.Dropdown(
+                                        id="map-metric",
+                                        className="light-dropdown",
+                                        options=[],
+                                        value=DEFAULT_METRIC,
+                                        clearable=False,
+                                        searchable=True,
+                                        placeholder="Select a metric…",
+                                    ),
+                                ],
+                            ),
+                            dcc.Graph(
+                                id="world-map",
+                                className="panel-content",
+                                figure=make_map(DEFAULT_METRIC),
+                                style={"height": "100%", "width": "100%"},
+                                config={
+                                    "displayModeBar": False,
+                                    "scrollZoom": True,
+                                    "doubleClick": "reset",
+                                    "responsive": True,
+                                },
+                            ),
+                        ],
+                    ),
 
-                # RIGHT: Main panel = PCP (the “main” dashboard plot)
-                html.Div(
-                    className="panel panel-tight",
-                    children=[
+                    # RIGHT: Main panel = PCP (the “main” dashboard plot)
+                    html.Div(
+                        className="panel panel-tight",
+                        children=[
 
-                        # Stores for linking interactions
-                        dcc.Store(id="pcp-constraints", data={}),
-                        dcc.Store(id="pcp-selected-countries", data=[]),
+                            # Stores for linking interactions
+                            dcc.Store(id="pcp-constraints", data={}),
+                            dcc.Store(id="pcp-selected-countries", data=[]),
 
-                        html.Div(
-                            className="pcp-controls",
-                            children=[
-                                html.Div(
-                                    children=[
-                                        html.Label("PCP metrics (axes)", className="control-label"),
-                                        dcc.Dropdown(
-                                            id="pcp-dims",
-                                            className="light-dropdown",
-                                            options=[{"label": label_for(c), "value": c} for c in numeric_cols],
-                                            value=[c for c in [
-                                                "Real_GDP_per_Capita_USD",
-                                                "Unemployment_Rate_percent",
-                                                "electricity_access_percent",
-                                                "roadways_km",
-                                                "mobile_cellular_subscriptions_total",
-                                            ] if c in df.columns][:5],
-                                            multi=True,
-                                            clearable=False,
-                                            placeholder="Select dimensions…",
-                                        ),
-                                    ],
-                                ),
+                            html.Div(
+                                className="pcp-controls",
+                                children=[
+                                    html.Div(
+                                        children=[
+                                            html.Label("PCP metrics (axes)", className="control-label"),
+                                            dcc.Dropdown(
+                                                id="pcp-dims",
+                                                className="light-dropdown",
+                                                options=[{"label": label_for(c), "value": c} for c in numeric_cols],
+                                                value=[c for c in [
+                                                    "Real_GDP_per_Capita_USD",
+                                                    "Unemployment_Rate_percent",
+                                                    "electricity_access_percent",
+                                                    "roadways_km",
+                                                    "mobile_cellular_subscriptions_total",
+                                                ] if c in df.columns][:5],
+                                                multi=True,
+                                                clearable=False,
+                                                placeholder="Select dimensions…",
+                                            ),
+                                        ],
+                                    ),
 
-                                html.Div(
-                                    children=[
-                                        html.Label("Color variable:", className="control-label"),
-                                        html.Div("*The variable selected for color is the variable set for the color scale in the plots below as well.", className='control-label'),
-                                        dcc.Dropdown(
-                                            id="pcp-color",
-                                            className="light-dropdown",
-                                            options=[{"label": label_for(c), "value": c} for c in numeric_cols],
-                                            value="Real_GDP_per_Capita_USD" if "Real_GDP_per_Capita_USD" in df.columns else (numeric_cols[0] if numeric_cols else None),
-                                            clearable=False,
-                                        ),
-                                    ],
-                                ),
+                                    html.Div(
+                                        children=[
+                                            html.Label("Color variable:", className="control-label"),
+                                            html.Div("*The variable selected for color is the variable set for the color scale in the plots below as well.", className='control-label'),
+                                            dcc.Dropdown(
+                                                id="pcp-color",
+                                                className="light-dropdown",
+                                                options=[{"label": label_for(c), "value": c} for c in numeric_cols],
+                                                value="Real_GDP_per_Capita_USD" if "Real_GDP_per_Capita_USD" in df.columns else (numeric_cols[0] if numeric_cols else None),
+                                                clearable=False,
+                                            ),
+                                        ],
+                                    ),
 
-                                html.Div(
-                                    className="pcp-scale",
-                                    children=[
-                                        html.Label("Scale", className="control-label"),
-                                        dcc.RadioItems(
-                                            id="pcp-scale",
-                                            className="radio-row",
-                                            options=[
-                                                {"label": "Percentile", "value": "pct"},
-                                                {"label": "Z-score", "value": "z"},
-                                                {"label": "Log10", "value": "log"},
-                                                {"label": "Raw", "value": "raw"},
-                                            ],
-                                            value="pct",
-                                            inline=True,
-                                        ),
-                                    ],
-                                ),
+                                    html.Div(
+                                        className="pcp-scale",
+                                        children=[
+                                            html.Label("Scale", className="control-label"),
+                                            dcc.RadioItems(
+                                                id="pcp-scale",
+                                                className="radio-row",
+                                                options=[
+                                                    {"label": "Percentile", "value": "pct"},
+                                                    {"label": "Z-score", "value": "z"},
+                                                    {"label": "Log10", "value": "log"},
+                                                    {"label": "Raw", "value": "raw"},
+                                                ],
+                                                value="pct",
+                                                inline=True,
+                                            ),
+                                        ],
+                                    ),
 
 
-                                html.Div(
-                                    className="pcp-actions",
-                                    children=[
-                                        html.Button("Reset selection", id="pcp-reset", n_clicks=0, className="btn"),
-                                        html.Div(id="pcp-status", className="status-pill", children="Selected: all countries"),
-                                    ],
-                                ),
-                            ],
-                        ),
+                                    html.Div(
+                                        className="pcp-actions",
+                                        children=[
+                                            html.Button("Reset selection", id="pcp-reset", n_clicks=0, className="btn"),
+                                            html.Div(id="pcp-status", className="status-pill", children="Selected: all countries"),
+                                        ],
+                                    ),
+                                ],
+                            ),
 
-                        dcc.Graph(
-                            id="pcp",
-                            className="panel-content",
-                            config={"displayModeBar": False, "responsive": True},
-                        ),
-                    ],
-                ),
+                            dcc.Graph(
+                                id="pcp",
+                                className="panel-content",
+                                config={"displayModeBar": False, "responsive": True},
+                            ),
+                        ],
+                    ),
 
-            ],
+                ],
+            ),
+            html.Div(
+                className="app-grid2",
+                children=[
+                    # -----------------------------
+                    # Row 1 (full width): Scatter + Bar (2 cols each)
+                    # -----------------------------
+                    html.Div(
+                        className="panel panel-tall",
+                        style={"gridColumn": "span 2"},
+                        children=[
+                            html.Div("Opportunity vs Risk (Global)", className="panel-title"),
+                            dcc.Graph(
+                                id="opp-risk-scatter",
+                                className="panel-content",
+                                config={"displayModeBar": False, "responsive": True},
+                            ),
+                        ],
+                    ),
+                    html.Div(
+                        className="panel",
+                        style={"gridColumn": "span 2"},
+                        children=[
+                            html.Div("Top / Bottom Countries", className="panel-title"),
+                            dcc.Graph(
+                                id="ranked-bar",
+                                className="panel-content",
+                                config={"displayModeBar": False, "responsive": True},
+                            ),
+                        ],
+                    ),
+
+                    # -----------------------------
+                    # Row 2 (full width): Distribution + Companion panel
+                    # -----------------------------
+                    html.Div(
+                        className="panel",
+                        style={"gridColumn": "span 2"},
+                        children=[
+                            html.Div("Global Distribution Context", className="panel-title"),
+                            dcc.Graph(
+                                id="metric-distribution",
+                                className="panel-content",
+                                config={"displayModeBar": False, "responsive": True},
+                            ),
+                        ],
+                    ),
+                    html.Div(
+                        className="panel",
+                        style={"gridColumn": "span 2"},
+                        children=[
+                            html.Div("View 4 (placeholder)", className="panel-title"),
+                            html.Div("Placeholder", className="panel-placeholder"),
+                        ],
+                    ),
+
+                    # -----------------------------
+                    # Row 3 (4 panels)
+                    # -----------------------------
+                    html.Div(className="panel", children=[html.Div("View 5", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                    html.Div(className="panel", children=[html.Div("View 6", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                    html.Div(className="panel", children=[html.Div("View 7", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                    html.Div(className="panel", children=[html.Div("View 8", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+
+                    # -----------------------------
+                    # Row 4 (4 panels)
+                    # -----------------------------
+                    html.Div(className="panel", children=[html.Div("View 9", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                    html.Div(className="panel", children=[html.Div("View 10", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                    html.Div(className="panel", children=[html.Div("View 11", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                    html.Div(className="panel", children=[html.Div("View 12", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                ],
+            )
+            ],),
+        html.Div(
+    id="country-view",
+    style={"display": "none"},
+    children=[
+        html.Div(
+            id="country-header",
+            className="selected-country",
         ),
+
         html.Div(
             className="app-grid2",
             children=[
-                # -----------------------------
-                # Row 1 (full width): Scatter + Bar (2 cols each)
-                # -----------------------------
                 html.Div(
-                    className="panel",
+                    className="panel panel-tall",
                     style={"gridColumn": "span 2"},
                     children=[
-                        html.Div("Opportunity vs Risk (Global)", className="panel-title"),
-                        dcc.Graph(
-                            id="opp-risk-scatter",
-                            className="panel-content",
-                            config={"displayModeBar": False, "responsive": True},
-                        ),
+                        html.Div("Economic Snapshot", className="panel-title"),
+                        dcc.Graph(id="country-econ", className="panel-content"),
+                    ],
+                ),
+                html.Div(
+                    className="panel panel-tall",
+                    style={"gridColumn": "span 2"},
+                    children=[
+                        html.Div("Labor & Demographics", className="panel-title"),
+                        dcc.Graph(id="country-labor", className="panel-content"),
                     ],
                 ),
                 html.Div(
                     className="panel",
                     style={"gridColumn": "span 2"},
                     children=[
-                        html.Div("Top / Bottom Countries", className="panel-title"),
-                        dcc.Graph(
-                            id="ranked-bar",
-                            className="panel-content",
-                            config={"displayModeBar": False, "responsive": True},
-                        ),
-                    ],
-                ),
-
-                # -----------------------------
-                # Row 2 (full width): Distribution + Companion panel
-                # -----------------------------
-                html.Div(
-                    className="panel",
-                    style={"gridColumn": "span 2"},
-                    children=[
-                        html.Div("Global Distribution Context", className="panel-title"),
-                        dcc.Graph(
-                            id="metric-distribution",
-                            className="panel-content",
-                            config={"displayModeBar": False, "responsive": True},
-                        ),
+                        html.Div("Infrastructure Snapshot", className="panel-title"),
+                        dcc.Graph(id="country-infra", className="panel-content"),
                     ],
                 ),
                 html.Div(
                     className="panel",
                     style={"gridColumn": "span 2"},
                     children=[
-                        html.Div("View 4 (placeholder)", className="panel-title"),
-                        html.Div("Placeholder", className="panel-placeholder"),
+                        html.Div("Global Rank Context", className="panel-title"),
+                        dcc.Graph(id="country-rank", className="panel-content"),
                     ],
                 ),
-
-                # -----------------------------
-                # Row 3 (4 panels)
-                # -----------------------------
-                html.Div(className="panel", children=[html.Div("View 5", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                html.Div(className="panel", children=[html.Div("View 6", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                html.Div(className="panel", children=[html.Div("View 7", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                html.Div(className="panel", children=[html.Div("View 8", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-
-                # -----------------------------
-                # Row 4 (4 panels)
-                # -----------------------------
-                html.Div(className="panel", children=[html.Div("View 9", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                html.Div(className="panel", children=[html.Div("View 10", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                html.Div(className="panel", children=[html.Div("View 11", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                html.Div(className="panel", children=[html.Div("View 12", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
             ],
-        )
+        ),
+    ],
+),
+
+    
     ])
 
 # -----------------------------------------------------------------------------
@@ -905,6 +960,45 @@ def update_global_summary(metric, selected_countries, map_click, pcp_color):
     dist = make_distribution(metric, selected_country)
 
     return scatter, bars, dist
+
+@app.callback(
+    Output("active-country", "data"),
+    Input("world-map", "clickData"),
+    Input("pcp-reset", "n_clicks"),
+    prevent_initial_call=True,
+)
+def set_active_country(map_click, reset_clicks):
+    ctx = callback_context.triggered[0]["prop_id"]
+
+    if "pcp-reset" in ctx:
+        return None
+
+    if map_click:
+        return map_click["points"][0]["location"]
+
+    return None
+
+@app.callback(
+    Output("global-view", "style"),
+    Output("country-view", "style"),
+    Output("country-header", "children"),
+    Input("active-country", "data"),
+)
+def toggle_dashboard_views(country):
+    if country:
+        return (
+            {"display": "none"},
+            {"display": "block"},
+            f"Country focus: {country}",
+        )
+
+    return (
+        {"display": "block"},
+        {"display": "none"},
+        "",
+    )
+
+
 
 
 
