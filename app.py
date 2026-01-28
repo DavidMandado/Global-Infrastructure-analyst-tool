@@ -799,6 +799,160 @@ def make_distribution(metric: str, selected_country=None):
     fig = card_layout(fig, x_title=label_for(metric), y_title="Countries")
     return fig
 
+def make_gap_scatter(selected_countries: list[str], selected_country: Optional[str] = None):
+    """
+    Explicit 'gap' view:
+      x = GDP per capita percentile (0-100)
+      y = infrastructure score mean percentile (0-100)
+      color = gap (Infra - GDP) in percentile points
+    """
+    required = {"gdp_pc_pct", "infra_score_pct_mean", "gap_infra_score_vs_gdp"}
+    if not required.issubset(df.columns):
+        fig = go.Figure()
+        fig.update_layout(template="infra_light")
+        return fig
+
+    selected_countries = selected_countries or []
+
+    plot_df = df[[COUNTRY_COL, "gdp_pc_pct", "infra_score_pct_mean", "gap_infra_score_vs_gdp"]].copy()
+    plot_df = plot_df.dropna(subset=["gdp_pc_pct", "infra_score_pct_mean"])
+
+    if plot_df.empty:
+        fig = go.Figure()
+        fig.update_layout(template="infra_light")
+        return fig
+
+    # Convert to percentile points for readability
+    plot_df["_gdp_pp"] = pd.to_numeric(plot_df["gdp_pc_pct"], errors="coerce") * 100.0
+    plot_df["_infra_pp"] = pd.to_numeric(plot_df["infra_score_pct_mean"], errors="coerce") * 100.0
+    plot_df["_gap_pp"] = pd.to_numeric(plot_df["gap_infra_score_vs_gdp"], errors="coerce") * 100.0
+
+    fig = px.scatter(
+        plot_df,
+        x="_gdp_pp",
+        y="_infra_pp",
+        color="_gap_pp",
+        color_continuous_scale="RdBu",
+        color_continuous_midpoint=0,
+        hover_name=COUNTRY_COL,
+        labels={
+            "_gdp_pp": "GDP per Capita (percentile points)",
+            "_infra_pp": "Infrastructure Score (percentile points)",
+            "_gap_pp": "Gap (Infra − GDP) (pp)",
+        },
+        template="infra_light",
+    )
+
+    # Diagonal reference: "as expected for GDP"
+    fig.add_shape(
+        type="line",
+        x0=0, y0=0, x1=100, y1=100,
+        xref="x", yref="y",
+        line=dict(width=1, dash="dot", color="rgba(107,114,128,0.9)"),
+        layer="below",
+    )
+
+    # Selected set (from PCP brush): ring overlay
+    if selected_countries:
+        sel = plot_df[plot_df[COUNTRY_COL].isin(selected_countries)]
+        if len(sel) > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=sel["_gdp_pp"],
+                    y=sel["_infra_pp"],
+                    mode="markers",
+                    marker=dict(
+                        size=14,
+                        color="rgba(0,0,0,0)",
+                        line=dict(width=2.5, color="rgba(59,130,246,0.95)"),
+                    ),
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+
+    # Active country (from map click): star overlay
+    if selected_country:
+        row = plot_df[plot_df[COUNTRY_COL] == selected_country]
+        if len(row) > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=row["_gdp_pp"],
+                    y=row["_infra_pp"],
+                    mode="markers+text",
+                    marker=dict(size=16, symbol="star"),
+                    text=[selected_country],
+                    textposition="top center",
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+
+    fig.update_layout(coloraxis_showscale=False)
+    fig = card_layout(fig, x_title="GDP per Capita (percentile points)", y_title="Infrastructure Score (percentile points)")
+    return fig
+
+
+def make_gap_ranked_bar(selected_countries: list[str], top_n: int = 10):
+    """Top/bottom countries by gap_infra_score_vs_gdp (percentile points)."""
+    if "gap_infra_score_vs_gdp" not in df.columns:
+        fig = go.Figure()
+        fig.update_layout(template="infra_light")
+        return fig
+
+    selected_countries = selected_countries or []
+
+    s = pd.to_numeric(col_as_series(df, "gap_infra_score_vs_gdp"), errors="coerce") * 100.0
+    plot_df = pd.DataFrame({COUNTRY_COL: df[COUNTRY_COL], "_gap_pp": s}).dropna(subset=["_gap_pp"])
+    if plot_df.empty:
+        fig = go.Figure()
+        fig.update_layout(template="infra_light")
+        return fig
+
+    plot_df = plot_df.sort_values("_gap_pp", ascending=False)
+    top = plot_df.head(top_n)
+    bottom = plot_df.tail(top_n)
+    out = pd.concat([top, bottom], axis=0).drop_duplicates(subset=[COUNTRY_COL], keep="first")
+
+    out = out.sort_values("_gap_pp", ascending=True)
+
+    fig = px.bar(
+        out,
+        x="_gap_pp",
+        y=COUNTRY_COL,
+        orientation="h",
+        color="_gap_pp",
+        color_continuous_scale="RdBu",
+        color_continuous_midpoint=0,
+        template="infra_light",
+        labels={"_gap_pp": "Gap (Infra − GDP) (pp)", COUNTRY_COL: ""},
+    )
+
+    fig.update_layout(coloraxis_showscale=False)
+
+    # Selected overlay in blue
+    if selected_countries:
+        sel = out[out[COUNTRY_COL].isin(selected_countries)]
+        if len(sel) > 0:
+            fig.add_trace(
+                go.Bar(
+                    x=sel["_gap_pp"],
+                    y=sel[COUNTRY_COL],
+                    orientation="h",
+                    marker=dict(color="rgba(59,130,246,0.95)", line=dict(color="white", width=1.5)),
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+
+    fig.update_traces(
+        hovertemplate="<b>%{y}</b><br>Gap (Infra − GDP): %{x:.1f} pp<extra></extra>",
+        opacity=0.92,
+    )
+
+    fig = card_layout(fig, x_title="Gap (Infra − GDP) (percentile points)")
+    return fig
+
 
 def card_layout(fig, *, x_title=None, y_title=None):
     fig.update_layout(
@@ -1051,15 +1205,30 @@ app.layout = html.Div(
                         className="panel",
                         style={"gridColumn": "span 2"},
                         children=[
-                            html.Div("View 4 (placeholder)", className="panel-title"),
-                            html.Div("Placeholder", className="panel-placeholder"),
+                            html.Div("Infrastructure vs GDP (Gap view)", className="panel-title"),
+                            dcc.Graph(
+                                id="gap-scatter",
+                                className="panel-content",
+                                config={"displayModeBar": False, "responsive": True},
+                            ),
                         ],
                     ),
+
 
                     # -----------------------------
                     # Row 3 (4 panels)
                     # -----------------------------
-                    html.Div(className="panel", children=[html.Div("View 5", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                    html.Div(
+                        className="panel",
+                        children=[
+                            html.Div("Gap leaders / laggards", className="panel-title"),
+                            dcc.Graph(
+                                id="gap-ranked",
+                                className="panel-content",
+                                config={"displayModeBar": False, "responsive": True},
+                            ),
+                        ],
+                    ),
                     html.Div(className="panel", children=[html.Div("View 6", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
                     html.Div(className="panel", children=[html.Div("View 7", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
                     html.Div(className="panel", children=[html.Div("View 8", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
@@ -1217,6 +1386,23 @@ def update_global_summary(metric, selected_countries, map_click, pcp_color):
     dist = make_distribution(metric, selected_country)
 
     return scatter, bars, dist
+
+@app.callback(
+    Output("gap-scatter", "figure"),
+    Output("gap-ranked", "figure"),
+    Input("pcp-selected-countries", "data"),
+    Input("world-map", "clickData"),
+)
+def update_gap_views(selected_countries, map_click):
+    selected_country = None
+    if map_click:
+        selected_country = map_click["points"][0]["location"]
+
+    gap_scatter = make_gap_scatter(selected_countries, selected_country=selected_country)
+    gap_ranked = make_gap_ranked_bar(selected_countries, top_n=10)
+
+    return gap_scatter, gap_ranked
+
 
 @app.callback(
     Output("active-country", "data"),
