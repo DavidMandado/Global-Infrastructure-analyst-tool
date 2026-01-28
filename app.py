@@ -23,7 +23,7 @@ THEME = {
 }
 
 # -----------------------------------------------------------------------------
-# Plotly template (light)  ✅ REQUIRED because you use template="infra_light"
+# Plotly template (light)
 # -----------------------------------------------------------------------------
 pio.templates["infra_light"] = go.layout.Template(
     layout=dict(
@@ -43,7 +43,6 @@ pio.templates.default = "infra_light"
 # -----------------------------------------------------------------------------
 # Data (load + clean + derive)
 # -----------------------------------------------------------------------------
-
 COUNTRY_COL = "Country"
 
 NON_NUMERIC_COLS = {
@@ -211,10 +210,58 @@ def load_and_prepare_data(csv_path: str) -> pd.DataFrame:
 
 df = load_and_prepare_data("data/CIA_DATA.csv")
 
+# -----------------------------------------------------------------------------
+# Derived peer groups (no new data required)
+# -----------------------------------------------------------------------------
+if "gdp_pc_pct" in df.columns:
+    df["income_band"] = pd.cut(
+        df["gdp_pc_pct"],
+        bins=[-0.01, 0.25, 0.75, 1.01],
+        labels=["Low income", "Middle income", "High income"],
+    )
+else:
+    df["income_band"] = pd.Series([pd.NA] * len(df), index=df.index)
+
+POP_COL = "Total_Population" if "Total_Population" in df.columns else ("population" if "population" in df.columns else None)
+if POP_COL is not None:
+    df["population_band"] = pd.cut(
+        pd.to_numeric(df[POP_COL], errors="coerce"),
+        bins=[0, 5e6, 25e6, 100e6, 2e9],
+        labels=[
+            "Small (<5M)",
+            "Medium (5–25M)",
+            "Large (25–100M)",
+            "Very large (>100M)",
+        ],
+    )
+else:
+    df["population_band"] = pd.Series([pd.NA] * len(df), index=df.index)
+
+INCOME_BAND_ORDER = ["Low income", "Middle income", "High income"]
+POP_BAND_ORDER = ["Small (<5M)", "Medium (5–25M)", "Large (25–100M)", "Very large (>100M)"]
+
+INCOME_BAND_OPTIONS = [
+    {"label": b, "value": b}
+    for b in INCOME_BAND_ORDER
+    if b in set(df["income_band"].astype("string").dropna().unique())
+]
+POP_BAND_OPTIONS = [
+    {"label": b, "value": b}
+    for b in POP_BAND_ORDER
+    if b in set(df["population_band"].astype("string").dropna().unique())
+]
+
+def apply_peer_filters(base_df: pd.DataFrame, income_bands, population_bands) -> pd.DataFrame:
+    out = base_df
+    if income_bands:
+        out = out[out["income_band"].isin(income_bands)]
+    if population_bands:
+        out = out[out["population_band"].isin(population_bands)]
+    return out
+
 
 DEFAULT_METRIC = "Real_GDP_per_Capita_USD" if "Real_GDP_per_Capita_USD" in df.columns else None
 numeric_cols = df.select_dtypes(include="number").columns.tolist()
-
 
 def pretty_label(col: str) -> str:
     s = col.replace("_", " ").strip()
@@ -253,7 +300,6 @@ LABELS = {
     "gdp_pc_pct": "GDP per Capita (percentile)",
     "infra_score_pct_mean": "Infrastructure Score (mean percentile)",
     "gap_infra_score_vs_gdp": "Gap: Infra Score − GDP (pct points)",
-
 }
 
 GROUP_RULES = [
@@ -278,7 +324,6 @@ def assign_group(col: str) -> str:
 def label_for(c: str) -> str:
     return LABELS.get(c, pretty_label(c))
 
-# Bucket columns into groups
 buckets = {g[0]: [] for g in GROUP_RULES}
 for c in numeric_cols:
     buckets[assign_group(c)].append(c)
@@ -289,39 +334,38 @@ for g in buckets:
 if DEFAULT_METRIC is None and numeric_cols:
     DEFAULT_METRIC = numeric_cols[0]
 
-# ------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Global color encoding (used across summary plots)
-# ------------------------------------------------------------------
-
+# -----------------------------------------------------------------------------
 GLOBAL_COLOR_METRIC = (
     "Real_GDP_per_Capita_USD"
     if "Real_GDP_per_Capita_USD" in df.columns
     else (numeric_cols[0] if numeric_cols else None)
 )
-
-GLOBAL_COLORSCALE = "Viridis"  # perceptually uniform, investor-safe
-
+GLOBAL_COLORSCALE = "Viridis"
 
 def col_as_series(frame: pd.DataFrame, col: str) -> pd.Series:
     """
     Returns a 1D Series even if `col` is duplicated in the DataFrame.
-    If duplicates exist, we take the first occurrence.
+    If duplicates exist, take the first occurrence.
     """
-    obj = frame.loc[:, col]  # Series if unique, DataFrame if duplicated
+    obj = frame.loc[:, col]
     if isinstance(obj, pd.DataFrame):
         obj = obj.iloc[:, 0]
     return obj
 
 # -----------------------------------------------------------------------------
-# Figure builder
+# Figure builders
 # -----------------------------------------------------------------------------
-def make_map(metric: str):
-    if not metric or metric not in df.columns:
+def make_map(metric: str, data_df: Optional[pd.DataFrame] = None):
+    data_df = df if data_df is None else data_df
+
+    if not metric or metric not in data_df.columns:
         fig = go.Figure()
         fig.update_layout(template="infra_light")
         return fig
 
-    s = pd.to_numeric(df[metric], errors="coerce")
+    s = pd.to_numeric(col_as_series(data_df, metric), errors="coerce")
     s_valid = s.dropna()
     if len(s_valid) == 0:
         fig = go.Figure()
@@ -335,7 +379,7 @@ def make_map(metric: str):
         vmax = s_valid.max()
 
     fig = px.choropleth(
-        df,
+        data_df,
         locations=COUNTRY_COL,
         locationmode="country names",
         color=metric,
@@ -348,7 +392,7 @@ def make_map(metric: str):
         hovertemplate="<b>%{location}</b><br>"
                       f"{label_for(metric)}: %{{z}}<br>"
                       f"Color range: [{vmin:.2f}, {vmax:.2f}] (5–95th pct)<extra></extra>",
-        marker_line_width=0
+        marker_line_width=0,
     )
 
     fig.update_layout(
@@ -379,7 +423,7 @@ def _to_numeric_series(series: pd.Series) -> pd.Series:
 
 def transform_for_pcp(df_in: pd.DataFrame, cols: list[str], mode: str) -> pd.DataFrame:
     """
-    Returns a DataFrame with the selected cols transformed for comparability.
+    Returns a DataFrame with selected cols transformed for comparability.
     - pct: percentile (0..1)
     - z: z-score
     - log: log10(positive only -> others become NaN)
@@ -390,7 +434,6 @@ def transform_for_pcp(df_in: pd.DataFrame, cols: list[str], mode: str) -> pd.Dat
         s = _to_numeric_series(df_in[c])
 
         if mode == "pct":
-            # percentile ranks in [0,1]
             out[c] = s.rank(pct=True)
         elif mode == "z":
             mu = s.mean(skipna=True)
@@ -400,7 +443,6 @@ def transform_for_pcp(df_in: pd.DataFrame, cols: list[str], mode: str) -> pd.Dat
             out[c] = s.where(s > 0).apply(lambda v: None if pd.isna(v) else __import__("math").log10(v))
         else:
             out[c] = s
-
     return out
 
 def apply_constraints(df_in: pd.DataFrame, constraints: dict) -> pd.DataFrame:
@@ -421,16 +463,13 @@ def apply_constraints(df_in: pd.DataFrame, constraints: dict) -> pd.DataFrame:
             lo, hi = cr
             d = d[(s >= lo) & (s <= hi)]
         elif isinstance(cr, list) and len(cr) > 0 and isinstance(cr[0], list):
-            # union of multiple ranges
             mask = False
             for lo, hi in cr:
                 mask = mask | ((s >= lo) & (s <= hi))
             d = d[mask]
-
     return d
 
 def _unwrap_single_trace_value(v):
-    # Plotly restyleData often wraps values in a list per trace: [[lo,hi]] or [[[lo,hi],[lo2,hi2]]]
     if isinstance(v, list) and len(v) == 1:
         return v[0]
     return v
@@ -465,14 +504,10 @@ def parse_pcp_constraints(restyle, dims, existing: Optional[dict] = None) -> dic
         v = _unwrap_single_trace_value(v)
 
         if bound_idx is None:
-            # Full constraintrange: [lo, hi] OR [[lo,hi],[lo2,hi2]]
             updates[dim_name] = v
         else:
-            # Partial update: constraintrange[0] or [1]
             bi = int(bound_idx)
             cur = existing.get(dim_name)
-
-            # unwrap current too if it was stored wrapped
             cur = _unwrap_single_trace_value(cur)
 
             if not (isinstance(cur, list) and len(cur) == 2):
@@ -485,9 +520,7 @@ def parse_pcp_constraints(restyle, dims, existing: Optional[dict] = None) -> dic
 
     return updates
 
-
 def clean_pcp_constraints(constraints: dict, dims: list[str]) -> dict:
-    """Remove cleared/invalid constraint entries and constraints for axes not currently shown."""
     if not constraints:
         return {}
     dims = dims or []
@@ -502,40 +535,47 @@ def clean_pcp_constraints(constraints: dict, dims: list[str]) -> dict:
         out[k] = v
     return out
 
+def make_pcp(
+    dims: list[str],
+    color_metric: str,
+    scale_mode: str,
+    constraints: dict,
+    data_df: Optional[pd.DataFrame] = None,
+):
+    """
+    Builds a go.Parcoords PCP.
+    Constraints are applied to compute selected countries and shown on axes.
+    """
+    data_df = df if data_df is None else data_df
 
-def make_pcp(dims: list[str], color_metric: str, scale_mode: str, constraints: dict):
-    """
-    Builds a go.Parcoords PCP (best for interaction + brush).
-    The constraints are applied to compute selected countries, but also shown on axes.
-    """
     if not dims:
         fig = go.Figure()
-        fig.update_layout(template="infra_light",margin=dict(l=20, r=20, t=10, b=10),dragmode="pan",)
+        fig.update_layout(
+            template="infra_light",
+            margin=dict(l=20, r=20, t=10, b=10),
+            dragmode="pan",
+        )
         return fig, []
 
-    # Transform for comparability
-    td = transform_for_pcp(df, dims + ([color_metric] if color_metric and color_metric not in dims else []), scale_mode)
+    cols = dims + ([color_metric] if color_metric and color_metric not in dims else [])
+    td = transform_for_pcp(data_df, cols, scale_mode)
 
-    # Apply constraints in transformed space
     if not constraints:
         selected_countries = []
     else:
         td_filtered = apply_constraints(td, constraints)
         selected_countries = td_filtered[COUNTRY_COL].dropna().tolist()
 
-    # line colors
     if color_metric and color_metric in td.columns:
         color_vals = td[color_metric]
     else:
         color_vals = td[dims[0]]
 
-    # build dimensions with optional constraintrange
     dim_objs = []
     for c in dims:
-        dim = dict(
-            label=label_for(c),
-            values=td[c],
-        )
+        if c not in td.columns:
+            continue
+        dim = dict(label=label_for(c), values=td[c])
         if constraints and c in constraints and constraints[c] is not None:
             dim["constraintrange"] = constraints[c]
         dim_objs.append(dim)
@@ -543,90 +583,85 @@ def make_pcp(dims: list[str], color_metric: str, scale_mode: str, constraints: d
     fig = go.Figure(
         data=[
             go.Parcoords(
-                line=dict(
-                    color=color_vals,
-                    colorscale="Viridis",
-                    showscale=False,
-                ),
+                line=dict(color=color_vals, colorscale="Viridis", showscale=False),
                 dimensions=dim_objs,
                 labelfont=dict(color=THEME["text"]),
                 tickfont=dict(color=THEME["muted_text"]),
             )
         ]
     )
-
-    fig.update_layout(
-        template="infra_light",
-        margin=dict(l=20, r=20, t=10, b=10),
-    )
-
+    fig.update_layout(template="infra_light", margin=dict(l=20, r=20, t=10, b=10))
     return fig, selected_countries
 
-def make_map_with_selection(metric: str, selected_countries: list[str]):
+def make_map_with_selection(
+    metric: str,
+    selected_countries: list[str],
+    data_df: Optional[pd.DataFrame] = None,
+):
     """
-    Keep the normal (full) choropleth colors exactly like make_map(),
-    and only add an outline on selected countries.
+    Choropleth based on `data_df`, plus an outline on selected countries.
     """
-    # 1) Start from the original "good looking" map (same scaling, same colors)
-    fig = make_map(metric)
+    data_df = df if data_df is None else data_df
+    fig = make_map(metric, data_df=data_df)
 
-    # 2) If nothing selected, return the normal map
     if not selected_countries:
         return fig
 
-    # 3) Add an outline trace for the selected countries (transparent fill)
+    peer_set = set(data_df[COUNTRY_COL].dropna().tolist())
+    selected_countries = [c for c in selected_countries if c in peer_set]
+    if not selected_countries:
+        return fig
+
     outline = go.Choropleth(
         locations=selected_countries,
         locationmode="country names",
-        z=[1] * len(selected_countries),  # dummy values
-        colorscale=[[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0)"]],  # fully transparent fill
+        z=[1] * len(selected_countries),
+        colorscale=[[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0)"]],
         showscale=False,
         hoverinfo="skip",
-        marker=dict(
-            line=dict(color="rgba(59,130,246,0.95)", width=2),  # blue outline (change if you want)
-        ),
+        marker=dict(line=dict(color="rgba(59,130,246,0.95)", width=2)),
     )
 
     fig.add_trace(outline)
     return fig
 
-def make_opp_risk_scatter(x_metric: str, y_metric: str, selected_countries: list[str], color_metric=None):
-    # Guards
-    if not x_metric or not y_metric or x_metric not in df.columns or y_metric not in df.columns:
+def make_opp_risk_scatter(
+    x_metric: str,
+    y_metric: str,
+    selected_countries: list[str],
+    color_metric=None,
+    data_df: Optional[pd.DataFrame] = None,
+):
+    data_df = df if data_df is None else data_df
+
+    if not x_metric or not y_metric or x_metric not in data_df.columns or y_metric not in data_df.columns:
         fig = go.Figure()
         fig.update_layout(template="infra_light")
         return fig
 
     selected_countries = selected_countries or []
 
-    # Pick color metric: PCP selection > global fallback
-    if not color_metric or color_metric not in df.columns:
-        color_metric = GLOBAL_COLOR_METRIC if (GLOBAL_COLOR_METRIC and GLOBAL_COLOR_METRIC in df.columns) else None
+    if not color_metric or color_metric not in data_df.columns:
+        color_metric = GLOBAL_COLOR_METRIC if (GLOBAL_COLOR_METRIC and GLOBAL_COLOR_METRIC in data_df.columns) else None
 
-    # Build numeric series safely (duplicate headers handled)
-    x = pd.to_numeric(col_as_series(df, x_metric), errors="coerce")
-    y = pd.to_numeric(col_as_series(df, y_metric), errors="coerce")
+    x = pd.to_numeric(col_as_series(data_df, x_metric), errors="coerce")
+    y = pd.to_numeric(col_as_series(data_df, y_metric), errors="coerce")
 
-    plot_df = pd.DataFrame({COUNTRY_COL: df[COUNTRY_COL], "_x": x, "_y": y})
-    plot_df = plot_df.dropna(subset=["_x", "_y"])
-
+    plot_df = pd.DataFrame({COUNTRY_COL: data_df[COUNTRY_COL], "_x": x, "_y": y}).dropna(subset=["_x", "_y"])
     if plot_df.empty:
         fig = go.Figure()
         fig.update_layout(template="infra_light")
         return fig
 
     use_color = False
+    plot_col = plot_df
     if color_metric:
-        c = pd.to_numeric(col_as_series(df, color_metric), errors="coerce")
+        c = pd.to_numeric(col_as_series(data_df, color_metric), errors="coerce")
         plot_df["_c"] = c
-
-        # Only use color if we have enough non-NaN values; otherwise, fallback to plain scatter
         non_na = plot_df["_c"].notna().sum()
         if non_na >= max(10, int(0.25 * len(plot_df))):
             use_color = True
             plot_col = plot_df.dropna(subset=["_c"])
-        else:
-            use_color = False
 
     if use_color:
         fig = px.scatter(
@@ -636,14 +671,9 @@ def make_opp_risk_scatter(x_metric: str, y_metric: str, selected_countries: list
             color="_c",
             color_continuous_scale=GLOBAL_COLORSCALE,
             hover_name=COUNTRY_COL,
-            labels={
-                "_x": label_for(x_metric),
-                "_y": label_for(y_metric),
-                "_c": label_for(color_metric),
-            },
+            labels={"_x": label_for(x_metric), "_y": label_for(y_metric), "_c": label_for(color_metric)},
             template="infra_light",
         )
-        # Hide colorbar (keeps chart clean in cards). You can turn it on later.
         fig.update_layout(coloraxis_showscale=False)
     else:
         fig = px.scatter(
@@ -656,13 +686,11 @@ def make_opp_risk_scatter(x_metric: str, y_metric: str, selected_countries: list
         )
         fig.update_traces(marker=dict(color="rgba(17,24,39,0.55)"))
 
-    # Marker style without destroying marker.color arrays
     for tr in fig.data:
         if tr.type == "scatter" and tr.mode == "markers":
             tr.marker.size = 8
             tr.marker.opacity = 0.85
 
-    # Selected countries: ring overlay (doesn't overwrite underlying color)
     if selected_countries:
         sel = plot_df[plot_df[COUNTRY_COL].isin(selected_countries)]
         if len(sel) > 0:
@@ -682,22 +710,20 @@ def make_opp_risk_scatter(x_metric: str, y_metric: str, selected_countries: list
             )
 
     fig = card_layout(fig, x_title=label_for(x_metric), y_title=label_for(y_metric))
-    
-    fig.update_traces(marker=dict(line=dict(width=0)))
-
     return fig
 
+def make_ranked_bar(metric: str, selected_countries: list[str], top_n=10, data_df: Optional[pd.DataFrame] = None):
+    data_df = df if data_df is None else data_df
 
-def make_ranked_bar(metric: str, selected_countries: list[str], top_n=10):
-    if not metric or metric not in df.columns:
+    if not metric or metric not in data_df.columns:
         fig = go.Figure()
         fig.update_layout(template="infra_light")
         return fig
 
     selected_countries = selected_countries or []
 
-    values = pd.to_numeric(col_as_series(df, metric), errors="coerce")
-    plot_df = pd.DataFrame({COUNTRY_COL: df[COUNTRY_COL], "_v": values}).dropna(subset=["_v"])
+    values = pd.to_numeric(col_as_series(data_df, metric), errors="coerce")
+    plot_df = pd.DataFrame({COUNTRY_COL: data_df[COUNTRY_COL], "_v": values}).dropna(subset=["_v"])
     if plot_df.empty:
         fig = go.Figure()
         fig.update_layout(template="infra_light")
@@ -708,7 +734,6 @@ def make_ranked_bar(metric: str, selected_countries: list[str], top_n=10):
     bottom = plot_df.tail(top_n)
     out = pd.concat([top, bottom], axis=0)
 
-    # Reverse so largest appears at top in horizontal bars
     out = out.iloc[::-1]
 
     fig = px.bar(
@@ -716,18 +741,14 @@ def make_ranked_bar(metric: str, selected_countries: list[str], top_n=10):
         x="_v",
         y=COUNTRY_COL,
         orientation="h",
-        color="_v",  # color by ranked value (best readability)
+        color="_v",
         color_continuous_scale=GLOBAL_COLORSCALE,
         template="infra_light",
         labels={"_v": label_for(metric), COUNTRY_COL: ""},
     )
 
-    fig.update_layout(
-        coloraxis_showscale=False,
-        barmode="overlay",
-    )
+    fig.update_layout(coloraxis_showscale=False, barmode="overlay")
 
-    # Selected overlay as solid blue bars (Plotly bars don't support marker.size)
     if selected_countries:
         sel = out[out[COUNTRY_COL].isin(selected_countries)]
         if len(sel) > 0:
@@ -750,15 +771,15 @@ def make_ranked_bar(metric: str, selected_countries: list[str], top_n=10):
     fig = card_layout(fig, x_title=label_for(metric))
     return fig
 
+def make_distribution(metric: str, selected_country=None, data_df: Optional[pd.DataFrame] = None):
+    data_df = df if data_df is None else data_df
 
-def make_distribution(metric: str, selected_country=None):
-    if not metric or metric not in df.columns:
+    if not metric or metric not in data_df.columns:
         fig = go.Figure()
         fig.update_layout(template="infra_light")
         return fig
 
-    s = pd.to_numeric(df[metric], errors="coerce").dropna()
-
+    s = pd.to_numeric(col_as_series(data_df, metric), errors="coerce").dropna()
     fig = go.Figure()
 
     fig.add_trace(
@@ -770,7 +791,6 @@ def make_distribution(metric: str, selected_country=None):
         )
     )
 
-    # Median & quartiles
     for q in [0.25, 0.5, 0.75]:
         fig.add_vline(
             x=s.quantile(q),
@@ -779,50 +799,41 @@ def make_distribution(metric: str, selected_country=None):
             line_color=THEME["muted_text"],
         )
 
-    # Selected country marker + soft fill
     if selected_country:
-        ser_all = col_as_series(df, metric)
-        ser = pd.to_numeric(ser_all[df[COUNTRY_COL] == selected_country], errors="coerce")
+        ser_all = col_as_series(data_df, metric)
+        ser = pd.to_numeric(ser_all[data_df[COUNTRY_COL] == selected_country], errors="coerce")
         if len(ser) > 0:
             val = ser.iloc[0]
             if pd.notna(val):
                 fig.add_vrect(x0=val, x1=val, fillcolor="rgba(59,130,246,0.15)", line_width=0)
                 fig.add_vline(x=val, line_width=2, line_color="rgba(59,130,246,0.95)")
 
-
-    fig.update_layout(
-        template="infra_light",
-        showlegend=False,
-        margin=dict(l=10, r=10, t=10, b=10),
-    )
-
+    fig.update_layout(template="infra_light", showlegend=False, margin=dict(l=10, r=10, t=10, b=10))
     fig = card_layout(fig, x_title=label_for(metric), y_title="Countries")
     return fig
 
-def make_gap_scatter(selected_countries: list[str], selected_country: Optional[str] = None):
-    """
-    Explicit 'gap' view:
-      x = GDP per capita percentile (0-100)
-      y = infrastructure score mean percentile (0-100)
-      color = gap (Infra - GDP) in percentile points
-    """
+def make_gap_scatter(
+    selected_countries: list[str],
+    selected_country: Optional[str] = None,
+    data_df: Optional[pd.DataFrame] = None,
+):
+    data_df = df if data_df is None else data_df
+
     required = {"gdp_pc_pct", "infra_score_pct_mean", "gap_infra_score_vs_gdp"}
-    if not required.issubset(df.columns):
+    if not required.issubset(data_df.columns):
         fig = go.Figure()
         fig.update_layout(template="infra_light")
         return fig
 
     selected_countries = selected_countries or []
 
-    plot_df = df[[COUNTRY_COL, "gdp_pc_pct", "infra_score_pct_mean", "gap_infra_score_vs_gdp"]].copy()
+    plot_df = data_df[[COUNTRY_COL, "gdp_pc_pct", "infra_score_pct_mean", "gap_infra_score_vs_gdp"]].copy()
     plot_df = plot_df.dropna(subset=["gdp_pc_pct", "infra_score_pct_mean"])
-
     if plot_df.empty:
         fig = go.Figure()
         fig.update_layout(template="infra_light")
         return fig
 
-    # Convert to percentile points for readability
     plot_df["_gdp_pp"] = pd.to_numeric(plot_df["gdp_pc_pct"], errors="coerce") * 100.0
     plot_df["_infra_pp"] = pd.to_numeric(plot_df["infra_score_pct_mean"], errors="coerce") * 100.0
     plot_df["_gap_pp"] = pd.to_numeric(plot_df["gap_infra_score_vs_gdp"], errors="coerce") * 100.0
@@ -843,7 +854,6 @@ def make_gap_scatter(selected_countries: list[str], selected_country: Optional[s
         template="infra_light",
     )
 
-    # Diagonal reference: "as expected for GDP"
     fig.add_shape(
         type="line",
         x0=0, y0=0, x1=100, y1=100,
@@ -852,7 +862,6 @@ def make_gap_scatter(selected_countries: list[str], selected_country: Optional[s
         layer="below",
     )
 
-    # Selected set (from PCP brush): ring overlay
     if selected_countries:
         sel = plot_df[plot_df[COUNTRY_COL].isin(selected_countries)]
         if len(sel) > 0:
@@ -871,7 +880,6 @@ def make_gap_scatter(selected_countries: list[str], selected_country: Optional[s
                 )
             )
 
-    # Active country (from map click): star overlay
     if selected_country:
         row = plot_df[plot_df[COUNTRY_COL] == selected_country]
         if len(row) > 0:
@@ -892,18 +900,22 @@ def make_gap_scatter(selected_countries: list[str], selected_country: Optional[s
     fig = card_layout(fig, x_title="GDP per Capita (percentile points)", y_title="Infrastructure Score (percentile points)")
     return fig
 
+def make_gap_ranked_bar(
+    selected_countries: list[str],
+    top_n: int = 10,
+    data_df: Optional[pd.DataFrame] = None,
+):
+    data_df = df if data_df is None else data_df
 
-def make_gap_ranked_bar(selected_countries: list[str], top_n: int = 10):
-    """Top/bottom countries by gap_infra_score_vs_gdp (percentile points)."""
-    if "gap_infra_score_vs_gdp" not in df.columns:
+    if "gap_infra_score_vs_gdp" not in data_df.columns:
         fig = go.Figure()
         fig.update_layout(template="infra_light")
         return fig
 
     selected_countries = selected_countries or []
 
-    s = pd.to_numeric(col_as_series(df, "gap_infra_score_vs_gdp"), errors="coerce") * 100.0
-    plot_df = pd.DataFrame({COUNTRY_COL: df[COUNTRY_COL], "_gap_pp": s}).dropna(subset=["_gap_pp"])
+    s = pd.to_numeric(col_as_series(data_df, "gap_infra_score_vs_gdp"), errors="coerce") * 100.0
+    plot_df = pd.DataFrame({COUNTRY_COL: data_df[COUNTRY_COL], "_gap_pp": s}).dropna(subset=["_gap_pp"])
     if plot_df.empty:
         fig = go.Figure()
         fig.update_layout(template="infra_light")
@@ -913,7 +925,6 @@ def make_gap_ranked_bar(selected_countries: list[str], top_n: int = 10):
     top = plot_df.head(top_n)
     bottom = plot_df.tail(top_n)
     out = pd.concat([top, bottom], axis=0).drop_duplicates(subset=[COUNTRY_COL], keep="first")
-
     out = out.sort_values("_gap_pp", ascending=True)
 
     fig = px.bar(
@@ -930,7 +941,6 @@ def make_gap_ranked_bar(selected_countries: list[str], top_n: int = 10):
 
     fig.update_layout(coloraxis_showscale=False)
 
-    # Selected overlay in blue
     if selected_countries:
         sel = out[out[COUNTRY_COL].isin(selected_countries)]
         if len(sel) > 0:
@@ -953,23 +963,14 @@ def make_gap_ranked_bar(selected_countries: list[str], top_n: int = 10):
     fig = card_layout(fig, x_title="Gap (Infra − GDP) (percentile points)")
     return fig
 
-
 def card_layout(fig, *, x_title=None, y_title=None):
     fig.update_layout(
-        margin=dict(l=48, r=16, t=8, b=40),  # tuned for your panel size
-        xaxis=dict(
-            title=None,
-            tickfont=dict(size=11),
-        ),
-        yaxis=dict(
-            title=None,
-            tickfont=dict(size=11),
-        ),
+        margin=dict(l=48, r=16, t=8, b=40),
+        xaxis=dict(title=None, tickfont=dict(size=11)),
+        yaxis=dict(title=None, tickfont=dict(size=11)),
     )
 
-    # Subtle axis labels as annotations (optional but recommended)
     annotations = []
-
     if x_title:
         annotations.append(
             dict(
@@ -982,7 +983,6 @@ def card_layout(fig, *, x_title=None, y_title=None):
                 font=dict(size=11, color=THEME["muted_text"]),
             )
         )
-
     if y_title:
         annotations.append(
             dict(
@@ -996,7 +996,6 @@ def card_layout(fig, *, x_title=None, y_title=None):
                 font=dict(size=11, color=THEME["muted_text"]),
             )
         )
-
     fig.update_layout(annotations=annotations)
     return fig
 
@@ -1015,295 +1014,321 @@ app.layout = html.Div(
         dcc.Store(id="active-country", data=None),
 
         html.Div(
+            className="peer-filter-bar",
+            style={
+                "display": "flex",
+                "gap": "12px",
+                "alignItems": "end",
+                "padding": "10px 12px",
+                "margin": "10px 0",
+                "background": THEME["panel"],
+                "border": f"1px solid {THEME['border']}",
+                "borderRadius": "12px",
+            },
+            children=[
+                html.Div(
+                    style={"minWidth": "240px"},
+                    children=[
+                        html.Label("Income band (peer group)", className="control-label"),
+                        dcc.Dropdown(
+                            id="income-band-filter",
+                            className="light-dropdown",
+                            options=INCOME_BAND_OPTIONS,
+                            value=[],
+                            multi=True,
+                            clearable=True,
+                            placeholder="All income bands",
+                        ),
+                    ],
+                ),
+                html.Div(
+                    style={"minWidth": "260px"},
+                    children=[
+                        html.Label("Population band (peer group)", className="control-label"),
+                        dcc.Dropdown(
+                            id="population-band-filter",
+                            className="light-dropdown",
+                            options=POP_BAND_OPTIONS,
+                            value=[],
+                            multi=True,
+                            clearable=True,
+                            placeholder="All population bands",
+                        ),
+                    ],
+                ),
+                html.Button(
+                    "Clear peer filters",
+                    id="peer-reset",
+                    n_clicks=0,
+                    className="btn",
+                    style={"height": "36px"},
+                ),
+            ],
+        ),
+
+        html.Div(
             id="global-view",
             children=[
-            html.Div(
-                className="top-row",
-                children=[
-                    # LEFT: Map panel
-                    html.Div(
-                        className="panel panel-tight",
-                        children=[
-                            html.Div(
-                                className="map-controls",
-                                children=[
-                                    dcc.Dropdown(
-                                        id="metric-group",
-                                        className="light-dropdown",
-                                        options=[{"label": g[0], "value": g[0]} for g in GROUP_RULES if g[0] != "Other"],
-                                        value="Economy",
-                                        clearable=False,
-                                        searchable=False,
-                                    ),
-                                    dcc.Dropdown(
-                                        id="map-metric",
-                                        className="light-dropdown",
-                                        options=[],
-                                        value=DEFAULT_METRIC,
-                                        clearable=False,
-                                        searchable=True,
-                                        placeholder="Select a metric…",
-                                    ),
-                                ],
-                            ),
-                            dcc.Graph(
-                                id="world-map",
-                                className="panel-content",
-                                figure=make_map(DEFAULT_METRIC),
-                                style={"height": "100%", "width": "100%"},
-                                config={
-                                    "displayModeBar": False,
-                                    "scrollZoom": True,
-                                    "doubleClick": "reset",
-                                    "responsive": True,
-                                },
-                            ),
-                        ],
-                    ),
+                html.Div(
+                    className="top-row",
+                    children=[
+                        html.Div(
+                            className="panel panel-tight",
+                            children=[
+                                html.Div(
+                                    className="map-controls",
+                                    children=[
+                                        dcc.Dropdown(
+                                            id="metric-group",
+                                            className="light-dropdown",
+                                            options=[{"label": g[0], "value": g[0]} for g in GROUP_RULES if g[0] != "Other"],
+                                            value="Economy",
+                                            clearable=False,
+                                            searchable=False,
+                                        ),
+                                        dcc.Dropdown(
+                                            id="map-metric",
+                                            className="light-dropdown",
+                                            options=[],
+                                            value=DEFAULT_METRIC,
+                                            clearable=False,
+                                            searchable=True,
+                                            placeholder="Select a metric…",
+                                        ),
+                                    ],
+                                ),
+                                dcc.Graph(
+                                    id="world-map",
+                                    className="panel-content",
+                                    figure=make_map(DEFAULT_METRIC),
+                                    style={"height": "100%", "width": "100%"},
+                                    config={
+                                        "displayModeBar": False,
+                                        "scrollZoom": True,
+                                        "doubleClick": "reset",
+                                        "responsive": True,
+                                    },
+                                ),
+                            ],
+                        ),
 
-                    # RIGHT: Main panel = PCP (the “main” dashboard plot)
-                    html.Div(
-                        className="panel panel-tight",
-                        children=[
+                        html.Div(
+                            className="panel panel-tight",
+                            children=[
+                                dcc.Store(id="pcp-constraints", data={}),
+                                dcc.Store(id="pcp-selected-countries", data=[]),
 
-                            # Stores for linking interactions
-                            dcc.Store(id="pcp-constraints", data={}),
-                            dcc.Store(id="pcp-selected-countries", data=[]),
+                                html.Div(
+                                    className="pcp-controls",
+                                    children=[
+                                        html.Div(
+                                            children=[
+                                                html.Label("PCP metrics (axes)", className="control-label"),
+                                                dcc.Dropdown(
+                                                    id="pcp-dims",
+                                                    className="light-dropdown",
+                                                    options=[{"label": label_for(c), "value": c} for c in numeric_cols],
+                                                    value=[c for c in [
+                                                        "Real_GDP_per_Capita_USD",
+                                                        "Unemployment_Rate_percent",
+                                                        "electricity_access_percent",
+                                                        "roadways_km",
+                                                        "mobile_cellular_subscriptions_total",
+                                                    ] if c in df.columns][:5],
+                                                    multi=True,
+                                                    clearable=False,
+                                                    placeholder="Select dimensions…",
+                                                ),
+                                            ],
+                                        ),
 
-                            html.Div(
-                                className="pcp-controls",
-                                children=[
-                                    html.Div(
-                                        children=[
-                                            html.Label("PCP metrics (axes)", className="control-label"),
-                                            dcc.Dropdown(
-                                                id="pcp-dims",
-                                                className="light-dropdown",
-                                                options=[{"label": label_for(c), "value": c} for c in numeric_cols],
-                                                value=[c for c in [
-                                                    "Real_GDP_per_Capita_USD",
-                                                    "Unemployment_Rate_percent",
-                                                    "electricity_access_percent",
-                                                    "roadways_km",
-                                                    "mobile_cellular_subscriptions_total",
-                                                ] if c in df.columns][:5],
-                                                multi=True,
-                                                clearable=False,
-                                                placeholder="Select dimensions…",
-                                            ),
-                                        ],
-                                    ),
+                                        html.Div(
+                                            children=[
+                                                html.Label("Color variable:", className="control-label"),
+                                                html.Div("*The variable selected for color is the variable set for the color scale in the plots below as well.", className="control-label"),
+                                                dcc.Dropdown(
+                                                    id="pcp-color",
+                                                    className="light-dropdown",
+                                                    options=[{"label": label_for(c), "value": c} for c in numeric_cols],
+                                                    value="Real_GDP_per_Capita_USD" if "Real_GDP_per_Capita_USD" in df.columns else (numeric_cols[0] if numeric_cols else None),
+                                                    clearable=False,
+                                                ),
+                                            ],
+                                        ),
 
-                                    html.Div(
-                                        children=[
-                                            html.Label("Color variable:", className="control-label"),
-                                            html.Div("*The variable selected for color is the variable set for the color scale in the plots below as well.", className='control-label'),
-                                            dcc.Dropdown(
-                                                id="pcp-color",
-                                                className="light-dropdown",
-                                                options=[{"label": label_for(c), "value": c} for c in numeric_cols],
-                                                value="Real_GDP_per_Capita_USD" if "Real_GDP_per_Capita_USD" in df.columns else (numeric_cols[0] if numeric_cols else None),
-                                                clearable=False,
-                                            ),
-                                        ],
-                                    ),
+                                        html.Div(
+                                            className="pcp-scale",
+                                            children=[
+                                                html.Label("Scale", className="control-label"),
+                                                dcc.RadioItems(
+                                                    id="pcp-scale",
+                                                    className="radio-row",
+                                                    options=[
+                                                        {"label": "Percentile", "value": "pct"},
+                                                        {"label": "Z-score", "value": "z"},
+                                                        {"label": "Log10", "value": "log"},
+                                                        {"label": "Raw", "value": "raw"},
+                                                    ],
+                                                    value="pct",
+                                                    inline=True,
+                                                ),
+                                            ],
+                                        ),
 
-                                    html.Div(
-                                        className="pcp-scale",
-                                        children=[
-                                            html.Label("Scale", className="control-label"),
-                                            dcc.RadioItems(
-                                                id="pcp-scale",
-                                                className="radio-row",
-                                                options=[
-                                                    {"label": "Percentile", "value": "pct"},
-                                                    {"label": "Z-score", "value": "z"},
-                                                    {"label": "Log10", "value": "log"},
-                                                    {"label": "Raw", "value": "raw"},
-                                                ],
-                                                value="pct",
-                                                inline=True,
-                                            ),
-                                        ],
-                                    ),
+                                        html.Div(
+                                            className="pcp-actions",
+                                            children=[
+                                                html.Button("Reset selection", id="pcp-reset", n_clicks=0, className="btn"),
+                                                html.Div(id="pcp-status", className="status-pill", children="Subset: none (showing all countries)"),
+                                            ],
+                                        ),
+                                    ],
+                                ),
 
+                                dcc.Graph(
+                                    id="pcp",
+                                    className="panel-content",
+                                    config={
+                                        "displayModeBar": False,
+                                        "responsive": True,
+                                        "scrollZoom": False,
+                                        "doubleClick": "reset",
+                                    },
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
 
-                                    html.Div(
-                                        className="pcp-actions",
-                                        children=[
-                                            html.Button("Reset selection", id="pcp-reset", n_clicks=0, className="btn"),
-                                            html.Div(id="pcp-status", className="status-pill", children="Subset: none (showing all countries)"),
-
-                                        ],
-                                    ),
-                                ],
-                            ),
-
-                            dcc.Graph(
-                                id="pcp",
-                                className="panel-content",
-                                config={
-                                    "displayModeBar": False,
-                                    "responsive": True,
-                                    "scrollZoom": False,
-                                    "doubleClick": "reset",
-                                },
-                            ),
-
-                        ],
-                    ),
-
-                ],
-            ),
-            html.Div(
-                className="app-grid2",
-                children=[
-                    # -----------------------------
-                    # Row 1 (full width): Scatter + Bar (2 cols each)
-                    # -----------------------------
-                    html.Div(
-                        className="panel panel-tall",
-                        style={"gridColumn": "span 2"},
-                        children=[
-                            html.Div("Opportunity vs Risk (Global)", className="panel-title"),
-                            dcc.Graph(
-                                id="opp-risk-scatter",
-                                className="panel-content",
-                                config={"displayModeBar": False, "responsive": True},
-                            ),
-                        ],
-                    ),
-                    html.Div(
-                        className="panel",
-                        style={"gridColumn": "span 2"},
-                        children=[
-                            html.Div("Top / Bottom Countries", className="panel-title"),
-                            dcc.Graph(
-                                id="ranked-bar",
-                                className="panel-content",
-                                config={"displayModeBar": False, "responsive": True},
-                            ),
-                        ],
-                    ),
-
-                    # -----------------------------
-                    # Row 2 (full width): Distribution + Companion panel
-                    # -----------------------------
-                    html.Div(
-                        className="panel",
-                        style={"gridColumn": "span 2"},
-                        children=[
-                            html.Div("Global Distribution Context", className="panel-title"),
-                            dcc.Graph(
-                                id="metric-distribution",
-                                className="panel-content",
-                                config={"displayModeBar": False, "responsive": True},
-                            ),
-                        ],
-                    ),
-                    html.Div(
-                        className="panel",
-                        style={"gridColumn": "span 2"},
-                        children=[
-                            html.Div("Infrastructure vs GDP (Gap view)", className="panel-title"),
-                            dcc.Graph(
-                                id="gap-scatter",
-                                className="panel-content",
-                                config={"displayModeBar": False, "responsive": True},
-                            ),
-                        ],
-                    ),
-
-
-                    # -----------------------------
-                    # Row 3 (4 panels)
-                    # -----------------------------
-                    html.Div(
-                        className="panel",
-                        children=[
-                            html.Div("Gap leaders / laggards", className="panel-title"),
-                            dcc.Graph(
-                                id="gap-ranked",
-                                className="panel-content",
-                                config={"displayModeBar": False, "responsive": True},
-                            ),
-                        ],
-                    ),
-                    html.Div(className="panel", children=[html.Div("View 6", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                    html.Div(className="panel", children=[html.Div("View 7", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                    html.Div(className="panel", children=[html.Div("View 8", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-
-                    # -----------------------------
-                    # Row 4 (4 panels)
-                    # -----------------------------
-                    html.Div(className="panel", children=[html.Div("View 9", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                    html.Div(className="panel", children=[html.Div("View 10", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                    html.Div(className="panel", children=[html.Div("View 11", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                    html.Div(className="panel", children=[html.Div("View 12", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                ],
-            )
-            ],),
-        html.Div(
-    id="country-view",
-    style={"display": "none"},
-    children=[
-        html.Div(
-            id="country-header",
-            className="selected-country",
-            style={"display": "flex", "alignItems": "center", "justifyContent": "space-between", "gap": "12px"},
-            children=[
-        html.Button("← Back to global overview", id="back-to-global", n_clicks=0, className="btn"),
-        html.Div(id="country-title", style={"fontWeight": "600"}),
-    ],
-),
-
+                html.Div(
+                    className="app-grid2",
+                    children=[
+                        html.Div(
+                            className="panel panel-tall",
+                            style={"gridColumn": "span 2"},
+                            children=[
+                                html.Div("Opportunity vs Risk (Global)", className="panel-title"),
+                                dcc.Graph(
+                                    id="opp-risk-scatter",
+                                    className="panel-content",
+                                    config={"displayModeBar": False, "responsive": True},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            className="panel",
+                            style={"gridColumn": "span 2"},
+                            children=[
+                                html.Div("Top / Bottom Countries", className="panel-title"),
+                                dcc.Graph(
+                                    id="ranked-bar",
+                                    className="panel-content",
+                                    config={"displayModeBar": False, "responsive": True},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            className="panel",
+                            style={"gridColumn": "span 2"},
+                            children=[
+                                html.Div("Global Distribution Context", className="panel-title"),
+                                dcc.Graph(
+                                    id="metric-distribution",
+                                    className="panel-content",
+                                    config={"displayModeBar": False, "responsive": True},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            className="panel",
+                            style={"gridColumn": "span 2"},
+                            children=[
+                                html.Div("Infrastructure vs GDP (Gap view)", className="panel-title"),
+                                dcc.Graph(
+                                    id="gap-scatter",
+                                    className="panel-content",
+                                    config={"displayModeBar": False, "responsive": True},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            className="panel",
+                            children=[
+                                html.Div("Gap leaders / laggards", className="panel-title"),
+                                dcc.Graph(
+                                    id="gap-ranked",
+                                    className="panel-content",
+                                    config={"displayModeBar": False, "responsive": True},
+                                ),
+                            ],
+                        ),
+                        html.Div(className="panel", children=[html.Div("View 6", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                        html.Div(className="panel", children=[html.Div("View 7", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                        html.Div(className="panel", children=[html.Div("View 8", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                        html.Div(className="panel", children=[html.Div("View 9", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                        html.Div(className="panel", children=[html.Div("View 10", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                        html.Div(className="panel", children=[html.Div("View 11", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                        html.Div(className="panel", children=[html.Div("View 12", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+                    ],
+                ),
+            ],
+        ),
 
         html.Div(
-            className="app-grid2",
+            id="country-view",
+            style={"display": "none"},
             children=[
                 html.Div(
-                    className="panel panel-tall",
-                    style={"gridColumn": "span 2"},
+                    id="country-header",
+                    className="selected-country",
+                    style={"display": "flex", "alignItems": "center", "justifyContent": "space-between", "gap": "12px"},
                     children=[
-                        html.Div("Economic Snapshot", className="panel-title"),
-                        dcc.Graph(id="country-econ", className="panel-content"),
+                        html.Button("← Back to global overview", id="back-to-global", n_clicks=0, className="btn"),
+                        html.Div(id="country-title", style={"fontWeight": "600"}),
                     ],
                 ),
                 html.Div(
-                    className="panel panel-tall",
-                    style={"gridColumn": "span 2"},
+                    className="app-grid2",
                     children=[
-                        html.Div("Labor & Demographics", className="panel-title"),
-                        dcc.Graph(id="country-labor", className="panel-content"),
-                    ],
-                ),
-                html.Div(
-                    className="panel",
-                    style={"gridColumn": "span 2"},
-                    children=[
-                        html.Div("Infrastructure Snapshot", className="panel-title"),
-                        dcc.Graph(id="country-infra", className="panel-content"),
-                    ],
-                ),
-                html.Div(
-                    className="panel",
-                    style={"gridColumn": "span 2"},
-                    children=[
-                        html.Div("Global Rank Context", className="panel-title"),
-                        dcc.Graph(id="country-rank", className="panel-content"),
+                        html.Div(
+                            className="panel panel-tall",
+                            style={"gridColumn": "span 2"},
+                            children=[html.Div("Economic Snapshot", className="panel-title"), dcc.Graph(id="country-econ", className="panel-content")],
+                        ),
+                        html.Div(
+                            className="panel panel-tall",
+                            style={"gridColumn": "span 2"},
+                            children=[html.Div("Labor & Demographics", className="panel-title"), dcc.Graph(id="country-labor", className="panel-content")],
+                        ),
+                        html.Div(
+                            className="panel",
+                            style={"gridColumn": "span 2"},
+                            children=[html.Div("Infrastructure Snapshot", className="panel-title"), dcc.Graph(id="country-infra", className="panel-content")],
+                        ),
+                        html.Div(
+                            className="panel",
+                            style={"gridColumn": "span 2"},
+                            children=[html.Div("Global Rank Context", className="panel-title"), dcc.Graph(id="country-rank", className="panel-content")],
+                        ),
                     ],
                 ),
             ],
         ),
     ],
-),
-
-    
-    ])
+)
 
 # -----------------------------------------------------------------------------
 # Callbacks
 # -----------------------------------------------------------------------------
+@app.callback(
+    Output("income-band-filter", "value"),
+    Output("population-band-filter", "value"),
+    Input("peer-reset", "n_clicks"),
+    prevent_initial_call=True,
+)
+def clear_peer_filters(_):
+    return [], []
+
 @app.callback(
     Output("map-metric", "options"),
     Output("map-metric", "value"),
@@ -1314,7 +1339,6 @@ def update_metric_dropdown(group_name):
     opts = [{"label": label_for(c), "value": c} for c in cols]
     val = DEFAULT_METRIC if DEFAULT_METRIC in cols else (cols[0] if cols else None)
     return opts, val
-
 
 @app.callback(
     Output("pcp", "figure"),
@@ -1328,14 +1352,15 @@ def update_metric_dropdown(group_name):
     Input("pcp", "restyleData"),
     Input("pcp-reset", "n_clicks"),
     Input("map-metric", "value"),
+    Input("income-band-filter", "value"),
+    Input("population-band-filter", "value"),
     State("pcp-constraints", "data"),
 )
-def update_pcp_and_map(dims, color_metric, scale_mode, restyle, reset_clicks, map_metric, stored_constraints):
+def update_pcp_and_map(dims, color_metric, scale_mode, restyle, reset_clicks, map_metric,
+                       income_bands, population_bands, stored_constraints):
     trig = (callback_context.triggered[0]["prop_id"] if callback_context.triggered else "")
     dims = dims or []
-    if "pcp.restyleData" in trig:
-        print("PCP restyleData:", restyle)
-    # reset button clears constraints
+
     if "pcp-reset" in trig:
         constraints = {}
     elif "pcp.restyleData" in trig:
@@ -1346,22 +1371,19 @@ def update_pcp_and_map(dims, color_metric, scale_mode, restyle, reset_clicks, ma
     else:
         constraints = stored_constraints or {}
 
-    # drop cleared constraints / constraints for non-visible axes
     constraints = clean_pcp_constraints(constraints, dims)
 
-    pcp_fig, selected = make_pcp(dims, color_metric, scale_mode, constraints)
+    plot_df = apply_peer_filters(df, income_bands, population_bands)
 
-    # status text: subset is "none" unless constraints exist
+    pcp_fig, selected = make_pcp(dims, color_metric, scale_mode, constraints, data_df=plot_df)
+    map_fig = make_map_with_selection(map_metric, selected, data_df=plot_df)
+
     if constraints:
-        status = f"Subset: {len(selected)} countries"
+        status = f"Peer group: {len(plot_df)} countries — Subset: {len(selected)} countries"
     else:
-        status = "Subset: none (showing all countries)"
-
-    # linked map highlight
-    map_fig = make_map_with_selection(map_metric, selected)
+        status = f"Peer group: {len(plot_df)} countries — Subset: none (showing peer group)"
 
     return pcp_fig, selected, constraints, status, map_fig
-
 
 @app.callback(
     Output("opp-risk-scatter", "figure"),
@@ -1371,9 +1393,10 @@ def update_pcp_and_map(dims, color_metric, scale_mode, restyle, reset_clicks, ma
     Input("pcp-selected-countries", "data"),
     Input("world-map", "clickData"),
     Input("pcp-color", "value"),
+    Input("income-band-filter", "value"),
+    Input("population-band-filter", "value"),
 )
-def update_global_summary(metric, selected_countries, map_click, pcp_color):
-    # Define proxies (can later be user-selectable)
+def update_global_summary(metric, selected_countries, map_click, pcp_color, income_bands, population_bands):
     opportunity_metric = metric
     risk_metric = "Public_Debt_percent_of_GDP" if "Public_Debt_percent_of_GDP" in df.columns else metric
 
@@ -1381,9 +1404,11 @@ def update_global_summary(metric, selected_countries, map_click, pcp_color):
     if map_click:
         selected_country = map_click["points"][0]["location"]
 
-    scatter = make_opp_risk_scatter(opportunity_metric, risk_metric, selected_countries, color_metric=pcp_color)
-    bars = make_ranked_bar(metric, selected_countries)
-    dist = make_distribution(metric, selected_country)
+    plot_df = apply_peer_filters(df, income_bands, population_bands)
+
+    scatter = make_opp_risk_scatter(opportunity_metric, risk_metric, selected_countries, color_metric=pcp_color, data_df=plot_df)
+    bars = make_ranked_bar(metric, selected_countries, data_df=plot_df)
+    dist = make_distribution(metric, selected_country, data_df=plot_df)
 
     return scatter, bars, dist
 
@@ -1392,17 +1417,20 @@ def update_global_summary(metric, selected_countries, map_click, pcp_color):
     Output("gap-ranked", "figure"),
     Input("pcp-selected-countries", "data"),
     Input("world-map", "clickData"),
+    Input("income-band-filter", "value"),
+    Input("population-band-filter", "value"),
 )
-def update_gap_views(selected_countries, map_click):
+def update_gap_views(selected_countries, map_click, income_bands, population_bands):
     selected_country = None
     if map_click:
         selected_country = map_click["points"][0]["location"]
 
-    gap_scatter = make_gap_scatter(selected_countries, selected_country=selected_country)
-    gap_ranked = make_gap_ranked_bar(selected_countries, top_n=10)
+    plot_df = apply_peer_filters(df, income_bands, population_bands)
+
+    gap_scatter = make_gap_scatter(selected_countries, selected_country=selected_country, data_df=plot_df)
+    gap_ranked = make_gap_ranked_bar(selected_countries, top_n=10, data_df=plot_df)
 
     return gap_scatter, gap_ranked
-
 
 @app.callback(
     Output("active-country", "data"),
@@ -1413,11 +1441,9 @@ def update_gap_views(selected_countries, map_click):
 def set_active_country(map_click, reset_clicks, back_clicks):
     ctx = (callback_context.triggered[0]["prop_id"] if callback_context.triggered else "")
 
-    # leave country mode
     if "pcp-reset" in ctx or "back-to-global" in ctx:
         return None
 
-    # enter country mode
     if "world-map" in ctx and map_click:
         return map_click["points"][0]["location"]
 
@@ -1443,62 +1469,50 @@ def toggle_dashboard_views(country):
         "",
     )
 
-
 @app.callback(
     Output("country-econ", "figure"),
     Output("country-labor", "figure"),
     Output("country-infra", "figure"),
     Output("country-rank", "figure"),
     Input("active-country", "data"),
+    Input("income-band-filter", "value"),
+    Input("population-band-filter", "value"),
 )
-def update_country_dashboard(country):
+def update_country_dashboard(country, income_bands, population_bands):
     empty = go.Figure().update_layout(template="infra_light")
-
     if not country:
         return empty, empty, empty, empty
 
-    row = df[df[COUNTRY_COL] == country]
-    if row.empty:
+    row_df = df[df[COUNTRY_COL] == country]
+    if row_df.empty:
         return empty, empty, empty, empty
-
-    row = row.iloc[0]
+    row = row_df.iloc[0]
 
     econ_fig = go.Figure(
         go.Bar(
             x=["GDP per Capita", "Public Debt"],
-            y=[
-                row.get("Real_GDP_per_Capita_USD"),
-                row.get("Public_Debt_percent_of_GDP"),
-            ],
+            y=[row.get("Real_GDP_per_Capita_USD"), row.get("Public_Debt_percent_of_GDP")],
         )
     ).update_layout(template="infra_light")
 
     labor_fig = go.Figure(
         go.Bar(
             x=["Unemployment", "Youth Unemployment"],
-            y=[
-                row.get("Unemployment_Rate_percent"),
-                row.get("Youth_Unemployment_Rate_percent"),
-            ],
+            y=[row.get("Unemployment_Rate_percent"), row.get("Youth_Unemployment_Rate_percent")],
         )
     ).update_layout(template="infra_light")
 
     infra_fig = go.Figure(
         go.Bar(
             x=["Electricity Access", "Roadways"],
-            y=[
-                row.get("electricity_access_percent"),
-                row.get("roadways_km"),
-            ],
+            y=[row.get("electricity_access_percent"), row.get("roadways_km")],
         )
     ).update_layout(template="infra_light")
 
-    rank_fig = make_ranked_bar("Real_GDP_per_Capita_USD", [country])
+    peer_df = apply_peer_filters(df, income_bands, population_bands)
+    rank_fig = make_ranked_bar("Real_GDP_per_Capita_USD", [country], data_df=peer_df)
 
     return econ_fig, labor_fig, infra_fig, rank_fig
 
-
 if __name__ == "__main__":
     app.run(debug=True)
-
-
