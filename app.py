@@ -3,7 +3,10 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
+import numpy as np
 import re
+from typing import Optional
+
 
 # -----------------------------------------------------------------------------
 # App
@@ -38,13 +41,180 @@ pio.templates["infra_light"] = go.layout.Template(
 pio.templates.default = "infra_light"
 
 # -----------------------------------------------------------------------------
-# Data
+# Data (load + clean + derive)
 # -----------------------------------------------------------------------------
-df = pd.read_csv("data/CIA_DATA.csv")
 
 COUNTRY_COL = "Country"
+
+NON_NUMERIC_COLS = {
+    "Country",
+    "Fiscal_Year",
+    "internet_country_code",
+    "Geographic_Coordinates",
+    "Capital",
+    "Capital_Coordinates",
+    "Government_Type",
+}
+
+def _parse_numeric_series(s: pd.Series) -> pd.Series:
+    """
+    Converts strings like:
+      '652,230 sq km' -> 652230
+      '2.26%'         -> 2.26
+      '-40 m'         -> -40
+      '0 km'          -> 0
+    Keeps the first numeric token found; NaN if none.
+    """
+    ss = s.astype("string").str.strip()
+    ss = ss.replace(
+        {
+            "": pd.NA, "NA": pd.NA, "N/A": pd.NA, "n/a": pd.NA,
+            "--": pd.NA, "-": pd.NA, "None": pd.NA,
+        }
+    )
+    ss = ss.str.replace(",", "", regex=False)
+    ss = ss.str.replace("−", "-", regex=False)  # unicode minus
+    extracted = ss.str.extract(r"([-+]?\d*\.?\d+)", expand=False)
+    return pd.to_numeric(extracted, errors="coerce")
+
+def coerce_numeric_like_columns(df_in: pd.DataFrame, min_success: float = 0.60) -> pd.DataFrame:
+    """
+    For object/string columns (excluding NON_NUMERIC_COLS), try to parse numbers.
+    If parsing succeeds for >= min_success fraction of non-null cells, convert column to numeric.
+    """
+    df_out = df_in.copy()
+    for col in df_out.columns:
+        if col in NON_NUMERIC_COLS:
+            continue
+        if df_out[col].dtype == "object" or str(df_out[col].dtype).startswith("string"):
+            converted = _parse_numeric_series(df_out[col])
+            non_null = df_out[col].notna().sum()
+            if non_null == 0:
+                continue
+            success = converted.notna().sum() / non_null
+            if success >= min_success:
+                df_out[col] = converted
+    return df_out
+
+def add_derived_metrics(df_in: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds per-capita/per-100/per-1k metrics used in infra analysis.
+    """
+    df_out = df_in.copy()
+
+    pop = pd.to_numeric(df_out.get("Total_Population"), errors="coerce")
+    if pop is None:
+        return df_out
+
+    def safe_rate(num: pd.Series, den: pd.Series) -> pd.Series:
+        den2 = den.replace(0, np.nan)
+        return num / den2
+
+    # Subscriptions per 100 people
+    for src, dst in [
+        ("mobile_cellular_subscriptions_total", "mobile_subscriptions_per_100"),
+        ("telephone_fixed_subscriptions_total", "fixed_telephone_per_100"),
+        ("broadband_fixed_subscriptions_total", "fixed_broadband_per_100"),
+        ("internet_users_total", "internet_users_per_100"),
+    ]:
+        if src in df_out.columns:
+            num = pd.to_numeric(df_out[src], errors="coerce")
+            df_out[dst] = safe_rate(num, pop) * 100.0
+
+    # Length-based infrastructure per 1k people
+    for src, dst in [
+        ("roadways_km", "roadways_km_per_1k"),
+        ("railways_km", "railways_km_per_1k"),
+        ("waterways_km", "waterways_km_per_1k"),
+        ("gas_pipelines_km", "gas_pipelines_km_per_1k"),
+        ("oil_pipelines_km", "oil_pipelines_km_per_1k"),
+        ("refined_products_pipelines_km", "refined_products_pipelines_km_per_1k"),
+        ("water_pipelines_km", "water_pipelines_km_per_1k"),
+    ]:
+        if src in df_out.columns:
+            num = pd.to_numeric(df_out[src], errors="coerce")
+            df_out[dst] = safe_rate(num, pop) * 1000.0
+
+    # Airports/heliports per 1M people
+    for src, dst in [
+        ("airports_paved_runways_count", "airports_paved_per_1M"),
+        ("airports_unpaved_runways_count", "airports_unpaved_per_1M"),
+        ("heliports_count", "heliports_per_1M"),
+    ]:
+        if src in df_out.columns:
+            num = pd.to_numeric(df_out[src], errors="coerce")
+            df_out[dst] = safe_rate(num, pop) * 1_000_000.0
+
+    # Electricity capacity per capita (kW/person)
+    if "electricity_generating_capacity_kW" in df_out.columns:
+        num = pd.to_numeric(df_out["electricity_generating_capacity_kW"], errors="coerce")
+        df_out["electricity_capacity_kW_per_capita"] = safe_rate(num, pop)
+
+    # CO2 tons per capita (Mt -> metric tons)
+    if "carbon_dioxide_emissions_Mt" in df_out.columns:
+        num = pd.to_numeric(df_out["carbon_dioxide_emissions_Mt"], errors="coerce")
+        df_out["co2_tons_per_capita"] = safe_rate(num * 1_000_000.0, pop)
+
+    # Population density (people per km^2), prefer Land_Area else Area_Total
+    for area_col in ["Land_Area", "Area_Total"]:
+        if area_col in df_out.columns:
+            area = pd.to_numeric(df_out[area_col], errors="coerce").replace(0, np.nan)
+            df_out["population_density_per_km2"] = pop / area
+            break
+
+    return df_out
+
+def add_percentiles_and_gaps(df_in: pd.DataFrame, gdp_col: str = "Real_GDP_per_Capita_USD") -> pd.DataFrame:
+    """
+    Adds:
+      - gdp_pc_pct (percentile rank of GDP per capita)
+      - <metric>_pct for key infra metrics
+      - gap_<metric>_vs_gdp = <metric>_pct - gdp_pc_pct
+      - infra_score_pct_mean and gap_infra_score_vs_gdp
+    """
+    df_out = df_in.copy()
+    if gdp_col not in df_out.columns:
+        return df_out
+
+    gdp = pd.to_numeric(df_out[gdp_col], errors="coerce")
+    df_out["gdp_pc_pct"] = gdp.rank(pct=True)
+
+    infra_metrics = [
+        "fixed_broadband_per_100",
+        "mobile_subscriptions_per_100",
+        "internet_users_per_100",
+        "electricity_capacity_kW_per_capita",
+        "roadways_km_per_1k",
+        "railways_km_per_1k",
+        "co2_tons_per_capita",
+    ]
+
+    pct_cols = []
+    for m in infra_metrics:
+        if m in df_out.columns:
+            df_out[m + "_pct"] = pd.to_numeric(df_out[m], errors="coerce").rank(pct=True)
+            pct_cols.append(m + "_pct")
+            df_out["gap_" + m + "_vs_gdp"] = df_out[m + "_pct"] - df_out["gdp_pc_pct"]
+
+    if pct_cols:
+        df_out["infra_score_pct_mean"] = df_out[pct_cols].mean(axis=1, skipna=True)
+        df_out["gap_infra_score_vs_gdp"] = df_out["infra_score_pct_mean"] - df_out["gdp_pc_pct"]
+
+    return df_out
+
+def load_and_prepare_data(csv_path: str) -> pd.DataFrame:
+    df0 = pd.read_csv(csv_path)
+    df1 = coerce_numeric_like_columns(df0)
+    df2 = add_derived_metrics(df1)
+    df3 = add_percentiles_and_gaps(df2)
+    return df3
+
+df = load_and_prepare_data("data/CIA_DATA.csv")
+
+
 DEFAULT_METRIC = "Real_GDP_per_Capita_USD" if "Real_GDP_per_Capita_USD" in df.columns else None
 numeric_cols = df.select_dtypes(include="number").columns.tolist()
+
 
 def pretty_label(col: str) -> str:
     s = col.replace("_", " ").strip()
@@ -59,21 +229,35 @@ def pretty_label(col: str) -> str:
     return " ".join(words)
 
 LABELS = {
-    "Real_GDP_per_Capita_USD": "GDP per Capita (USD)",
-    "Real_GDP_PPP_billion_USD": "GDP (PPP, $B)",
-    "Unemployment_Rate_percent": "Unemployment Rate (%)",
-    "Youth_Unemployment_Rate_percent": "Youth Unemployment (%)",
-    "Public_Debt_percent_of_GDP": "Public Debt (% of GDP)",
-    "electricity_access_percent": "Electricity Access (%)",
-    "electricity_generating_capacity_kW": "Electricity Capacity (kW)",
-    "roadways_km": "Roadways (km)",
-    "railways_km": "Railways (km)",
-    "mobile_cellular_subscriptions_total": "Mobile Subscriptions (total)",
-    "broadband_fixed_subscriptions_total": "Fixed Broadband (total)",
-    "internet_users_total": "Internet Users (total)",
+    "mobile_subscriptions_per_100": "Mobile Subscriptions (per 100 people)",
+    "fixed_telephone_per_100": "Fixed Telephone (per 100 people)",
+    "fixed_broadband_per_100": "Fixed Broadband (per 100 people)",
+    "internet_users_per_100": "Internet Users (per 100 people)",
+
+    "roadways_km_per_1k": "Roadways (km per 1k people)",
+    "railways_km_per_1k": "Railways (km per 1k people)",
+    "waterways_km_per_1k": "Waterways (km per 1k people)",
+    "gas_pipelines_km_per_1k": "Gas Pipelines (km per 1k people)",
+    "oil_pipelines_km_per_1k": "Oil Pipelines (km per 1k people)",
+    "refined_products_pipelines_km_per_1k": "Refined Product Pipelines (km per 1k people)",
+    "water_pipelines_km_per_1k": "Water Pipelines (km per 1k people)",
+
+    "airports_paved_per_1M": "Paved Airports (per 1M people)",
+    "airports_unpaved_per_1M": "Unpaved Airports (per 1M people)",
+    "heliports_per_1M": "Heliports (per 1M people)",
+
+    "electricity_capacity_kW_per_capita": "Electricity Capacity (kW per person)",
+    "co2_tons_per_capita": "CO₂ (tons per person)",
+    "population_density_per_km2": "Population Density (per km²)",
+
+    "gdp_pc_pct": "GDP per Capita (percentile)",
+    "infra_score_pct_mean": "Infrastructure Score (mean percentile)",
+    "gap_infra_score_vs_gdp": "Gap: Infra Score − GDP (pct points)",
+
 }
 
 GROUP_RULES = [
+    ("Derived", ["gap_", "_pct", "score", "per_100", "per_capita", "per_1k", "per_1M", "density"]),
     ("Economy", ["gdp", "exports", "imports", "inflation", "debt", "budget", "poverty", "unemployment"]),
     ("Demographics", ["population", "birth", "death", "median_age", "growth", "literacy", "migration"]),
     ("Energy", ["electric", "electricity", "coal", "petroleum", "natural_gas", "emissions", "carbon"]),
@@ -245,25 +429,79 @@ def apply_constraints(df_in: pd.DataFrame, constraints: dict) -> pd.DataFrame:
 
     return d
 
-def parse_pcp_constraints(relayout: dict, dims: list[str]) -> dict:
-    """
-    PCP brush events come via relayoutData with keys like:
-    'dimensions[2].constraintrange': [a,b]
-    """
-    if not relayout:
+def _unwrap_single_trace_value(v):
+    # Plotly restyleData often wraps values in a list per trace: [[lo,hi]] or [[[lo,hi],[lo2,hi2]]]
+    if isinstance(v, list) and len(v) == 1:
+        return v[0]
+    return v
+
+def parse_pcp_constraints(restyle, dims, existing: Optional[dict] = None) -> dict:
+    existing = existing or {}
+    if not restyle:
         return {}
 
-    constraints = {}
-    for k, v in relayout.items():
+    if isinstance(restyle, (list, tuple)) and len(restyle) > 0 and isinstance(restyle[0], dict):
+        changes = restyle[0]
+    elif isinstance(restyle, dict):
+        changes = restyle
+    else:
+        return {}
+
+    updates = {}
+    for k, v in changes.items():
         if "constraintrange" not in k:
             continue
-        m = re.match(r"dimensions\[(\d+)\]\.constraintrange", k)
+
+        m = re.match(r"dimensions\[(\d+)\]\.constraintrange(?:\[(\d+)\])?$", k)
         if not m:
             continue
-        idx = int(m.group(1))
-        if 0 <= idx < len(dims):
-            constraints[dims[idx]] = v
-    return constraints
+
+        dim_idx = int(m.group(1))
+        bound_idx = m.group(2)
+        if dim_idx < 0 or dim_idx >= len(dims):
+            continue
+
+        dim_name = dims[dim_idx]
+        v = _unwrap_single_trace_value(v)
+
+        if bound_idx is None:
+            # Full constraintrange: [lo, hi] OR [[lo,hi],[lo2,hi2]]
+            updates[dim_name] = v
+        else:
+            # Partial update: constraintrange[0] or [1]
+            bi = int(bound_idx)
+            cur = existing.get(dim_name)
+
+            # unwrap current too if it was stored wrapped
+            cur = _unwrap_single_trace_value(cur)
+
+            if not (isinstance(cur, list) and len(cur) == 2):
+                cur = [None, None]
+
+            vv = _unwrap_single_trace_value(v)
+            cur2 = list(cur)
+            cur2[bi] = vv
+            updates[dim_name] = cur2
+
+    return updates
+
+
+def clean_pcp_constraints(constraints: dict, dims: list[str]) -> dict:
+    """Remove cleared/invalid constraint entries and constraints for axes not currently shown."""
+    if not constraints:
+        return {}
+    dims = dims or []
+    out = {}
+    for k, v in (constraints or {}).items():
+        if k not in dims:
+            continue
+        if v is None:
+            continue
+        if isinstance(v, list) and len(v) == 0:
+            continue
+        out[k] = v
+    return out
+
 
 def make_pcp(dims: list[str], color_metric: str, scale_mode: str, constraints: dict):
     """
@@ -272,15 +510,18 @@ def make_pcp(dims: list[str], color_metric: str, scale_mode: str, constraints: d
     """
     if not dims:
         fig = go.Figure()
-        fig.update_layout(template="infra_light")
+        fig.update_layout(template="infra_light",margin=dict(l=20, r=20, t=10, b=10),dragmode="pan",)
         return fig, []
 
     # Transform for comparability
     td = transform_for_pcp(df, dims + ([color_metric] if color_metric and color_metric not in dims else []), scale_mode)
 
     # Apply constraints in transformed space
-    td_filtered = apply_constraints(td, constraints)
-    selected_countries = td_filtered[COUNTRY_COL].dropna().tolist()
+    if not constraints:
+        selected_countries = []
+    else:
+        td_filtered = apply_constraints(td, constraints)
+        selected_countries = td_filtered[COUNTRY_COL].dropna().tolist()
 
     # line colors
     if color_metric and color_metric in td.columns:
@@ -295,7 +536,7 @@ def make_pcp(dims: list[str], color_metric: str, scale_mode: str, constraints: d
             label=label_for(c),
             values=td[c],
         )
-        if constraints and c in constraints:
+        if constraints and c in constraints and constraints[c] is not None:
             dim["constraintrange"] = constraints[c]
         dim_objs.append(dim)
 
@@ -737,7 +978,8 @@ app.layout = html.Div(
                                         className="pcp-actions",
                                         children=[
                                             html.Button("Reset selection", id="pcp-reset", n_clicks=0, className="btn"),
-                                            html.Div(id="pcp-status", className="status-pill", children="Selected: all countries"),
+                                            html.Div(id="pcp-status", className="status-pill", children="Subset: none (showing all countries)"),
+
                                         ],
                                     ),
                                 ],
@@ -746,8 +988,14 @@ app.layout = html.Div(
                             dcc.Graph(
                                 id="pcp",
                                 className="panel-content",
-                                config={"displayModeBar": False, "responsive": True},
+                                config={
+                                    "displayModeBar": False,
+                                    "responsive": True,
+                                    "scrollZoom": False,
+                                    "doubleClick": "reset",
+                                },
                             ),
+
                         ],
                     ),
 
@@ -833,7 +1081,13 @@ app.layout = html.Div(
         html.Div(
             id="country-header",
             className="selected-country",
-        ),
+            style={"display": "flex", "alignItems": "center", "justifyContent": "space-between", "gap": "12px"},
+            children=[
+        html.Button("← Back to global overview", id="back-to-global", n_clicks=0, className="btn"),
+        html.Div(id="country-title", style={"fontWeight": "600"}),
+    ],
+),
+
 
         html.Div(
             className="app-grid2",
@@ -902,40 +1156,43 @@ def update_metric_dropdown(group_name):
     Input("pcp-dims", "value"),
     Input("pcp-color", "value"),
     Input("pcp-scale", "value"),
-    Input("pcp", "relayoutData"),
+    Input("pcp", "restyleData"),
     Input("pcp-reset", "n_clicks"),
     Input("map-metric", "value"),
     State("pcp-constraints", "data"),
 )
-def update_pcp_and_map(dims, color_metric, scale_mode, relayout, reset_clicks, map_metric, stored_constraints):
-    # determine what triggered
+def update_pcp_and_map(dims, color_metric, scale_mode, restyle, reset_clicks, map_metric, stored_constraints):
     trig = (callback_context.triggered[0]["prop_id"] if callback_context.triggered else "")
-
+    dims = dims or []
+    if "pcp.restyleData" in trig:
+        print("PCP restyleData:", restyle)
     # reset button clears constraints
     if "pcp-reset" in trig:
         constraints = {}
-    elif "pcp.relayoutData" in trig:
-        # update constraints from brush events
-        constraints = parse_pcp_constraints(relayout, dims or [])
-        # merge with stored (so constraints persist if multiple axes brushed)
+    elif "pcp.restyleData" in trig:
+        incoming = parse_pcp_constraints(restyle, dims or [], existing=stored_constraints or {})
         merged = dict(stored_constraints or {})
-        merged.update(constraints)
+        merged.update(incoming)
         constraints = merged
     else:
         constraints = stored_constraints or {}
 
-    pcp_fig, selected = make_pcp(dims or [], color_metric, scale_mode, constraints)
+    # drop cleared constraints / constraints for non-visible axes
+    constraints = clean_pcp_constraints(constraints, dims)
 
-    # status text
-    if selected:
-        status = f"Selected: {len(selected)} countries"
+    pcp_fig, selected = make_pcp(dims, color_metric, scale_mode, constraints)
+
+    # status text: subset is "none" unless constraints exist
+    if constraints:
+        status = f"Subset: {len(selected)} countries"
     else:
-        status = "Selected: all countries"
+        status = "Subset: none (showing all countries)"
 
     # linked map highlight
     map_fig = make_map_with_selection(map_metric, selected)
 
     return pcp_fig, selected, constraints, status, map_fig
+
 
 @app.callback(
     Output("opp-risk-scatter", "figure"),
@@ -965,15 +1222,17 @@ def update_global_summary(metric, selected_countries, map_click, pcp_color):
     Output("active-country", "data"),
     Input("world-map", "clickData"),
     Input("pcp-reset", "n_clicks"),
-    prevent_initial_call=True,
+    Input("back-to-global", "n_clicks"),
 )
-def set_active_country(map_click, reset_clicks):
-    ctx = callback_context.triggered[0]["prop_id"]
+def set_active_country(map_click, reset_clicks, back_clicks):
+    ctx = (callback_context.triggered[0]["prop_id"] if callback_context.triggered else "")
 
-    if "pcp-reset" in ctx:
+    # leave country mode
+    if "pcp-reset" in ctx or "back-to-global" in ctx:
         return None
 
-    if map_click:
+    # enter country mode
+    if "world-map" in ctx and map_click:
         return map_click["points"][0]["location"]
 
     return None
@@ -981,7 +1240,7 @@ def set_active_country(map_click, reset_clicks):
 @app.callback(
     Output("global-view", "style"),
     Output("country-view", "style"),
-    Output("country-header", "children"),
+    Output("country-title", "children"),
     Input("active-country", "data"),
 )
 def toggle_dashboard_views(country):
@@ -1055,3 +1314,5 @@ def update_country_dashboard(country):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+
