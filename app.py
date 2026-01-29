@@ -625,6 +625,7 @@ def make_map_with_selection(
     fig.add_trace(outline)
     return fig
 
+
 def make_opp_risk_scatter(
     x_metric: str,
     y_metric: str,
@@ -671,6 +672,7 @@ def make_opp_risk_scatter(
             color="_c",
             color_continuous_scale=GLOBAL_COLORSCALE,
             hover_name=COUNTRY_COL,
+            custom_data=[COUNTRY_COL],  # ✅ ADD THIS
             labels={"_x": label_for(x_metric), "_y": label_for(y_metric), "_c": label_for(color_metric)},
             template="infra_light",
         )
@@ -681,34 +683,25 @@ def make_opp_risk_scatter(
             x="_x",
             y="_y",
             hover_name=COUNTRY_COL,
+            custom_data=[COUNTRY_COL],  # ✅ ADD THIS
             labels={"_x": label_for(x_metric), "_y": label_for(y_metric)},
             template="infra_light",
         )
         fig.update_traces(marker=dict(color="rgba(17,24,39,0.55)"))
 
-    for tr in fig.data:
-        if tr.type == "scatter" and tr.mode == "markers":
-            tr.marker.size = 8
-            tr.marker.opacity = 0.85
+    # ✅ Enable selection + keep it clean
+    fig.update_layout(
+        dragmode="select",          # box-select by drag (works even with hidden modebar)
+        clickmode="event+select",   # click selects a point
+    )
 
-    if selected_countries:
-        sel = plot_df[plot_df[COUNTRY_COL].isin(selected_countries)]
-        if len(sel) > 0:
-            fig.add_trace(
-                go.Scatter(
-                    x=sel["_x"],
-                    y=sel["_y"],
-                    mode="markers",
-                    marker=dict(
-                        size=14,
-                        color="rgba(0,0,0,0)",
-                        line=dict(width=2.5, color="rgba(59,130,246,0.95)"),
-                    ),
-                    hoverinfo="skip",
-                    showlegend=False,
-                )
-            )
-
+    # ✅ Remove outlines on normal points (keeps colors readable)
+    fig.update_traces(
+        marker=dict(size=8, opacity=0.85, line=dict(width=0)),
+        selector=dict(mode="markers"),
+    )
+    
+    
     fig = card_layout(fig, x_title=label_for(x_metric), y_title=label_for(y_metric))
     return fig
 
@@ -1012,6 +1005,10 @@ app.layout = html.Div(
             children="Click a country on the map to see more information.",
         ),
         dcc.Store(id="active-country", data=None),
+        dcc.Store(id="selected-countries", data=[]),        # shared multi-country selection (empty = no subset)
+        dcc.Store(id="selected-country-store", data=None),  # reserved for later (single country selection, not used yet)
+
+
 
         html.Div(
             className="peer-filter-bar",
@@ -1345,18 +1342,16 @@ def update_metric_dropdown(group_name):
     Output("pcp-selected-countries", "data"),
     Output("pcp-constraints", "data"),
     Output("pcp-status", "children"),
-    Output("world-map", "figure"),
     Input("pcp-dims", "value"),
     Input("pcp-color", "value"),
     Input("pcp-scale", "value"),
     Input("pcp", "restyleData"),
     Input("pcp-reset", "n_clicks"),
-    Input("map-metric", "value"),
     Input("income-band-filter", "value"),
     Input("population-band-filter", "value"),
     State("pcp-constraints", "data"),
 )
-def update_pcp_and_map(dims, color_metric, scale_mode, restyle, reset_clicks, map_metric,
+def update_pcp_and_map(dims, color_metric, scale_mode, restyle, reset_clicks,
                        income_bands, population_bands, stored_constraints):
     trig = (callback_context.triggered[0]["prop_id"] if callback_context.triggered else "")
     dims = dims or []
@@ -1376,46 +1371,73 @@ def update_pcp_and_map(dims, color_metric, scale_mode, restyle, reset_clicks, ma
     plot_df = apply_peer_filters(df, income_bands, population_bands)
 
     pcp_fig, selected = make_pcp(dims, color_metric, scale_mode, constraints, data_df=plot_df)
-    map_fig = make_map_with_selection(map_metric, selected, data_df=plot_df)
 
     if constraints:
         status = f"Peer group: {len(plot_df)} countries — Subset: {len(selected)} countries"
     else:
         status = f"Peer group: {len(plot_df)} countries — Subset: none (showing peer group)"
 
-    return pcp_fig, selected, constraints, status, map_fig
+    return pcp_fig, selected, constraints, status
+
+@app.callback(
+    Output("world-map", "figure"),
+    Input("map-metric", "value"),
+    Input("selected-countries", "data"),
+    Input("income-band-filter", "value"),
+    Input("population-band-filter", "value"),
+)
+def update_world_map(map_metric, selected_countries, income_bands, population_bands):
+    plot_df = apply_peer_filters(df, income_bands, population_bands)
+    return make_map_with_selection(map_metric, selected_countries or [], data_df=plot_df)
+
 
 @app.callback(
     Output("opp-risk-scatter", "figure"),
-    Output("ranked-bar", "figure"),
-    Output("metric-distribution", "figure"),
     Input("map-metric", "value"),
-    Input("pcp-selected-countries", "data"),
-    Input("world-map", "clickData"),
     Input("pcp-color", "value"),
     Input("income-band-filter", "value"),
     Input("population-band-filter", "value"),
 )
-def update_global_summary(metric, selected_countries, map_click, pcp_color, income_bands, population_bands):
+def update_opp_risk_scatter(metric, pcp_color, income_bands, population_bands):
     opportunity_metric = metric
     risk_metric = "Public_Debt_percent_of_GDP" if "Public_Debt_percent_of_GDP" in df.columns else metric
 
+    plot_df = apply_peer_filters(df, income_bands, population_bands)
+
+    # IMPORTANT: do not pass selected-countries here (prevents selection reset flicker)
+    return make_opp_risk_scatter(
+        opportunity_metric,
+        risk_metric,
+        selected_countries=[],        # ✅ keep scatter independent of server-side selection
+        color_metric=pcp_color,
+        data_df=plot_df,
+    )
+
+@app.callback(
+    Output("ranked-bar", "figure"),
+    Output("metric-distribution", "figure"),
+    Input("map-metric", "value"),
+    Input("selected-countries", "data"),
+    Input("world-map", "clickData"),
+    Input("income-band-filter", "value"),
+    Input("population-band-filter", "value"),
+)
+def update_bar_and_distribution(metric, selected_countries, map_click, income_bands, population_bands):
     selected_country = None
     if map_click:
         selected_country = map_click["points"][0]["location"]
 
     plot_df = apply_peer_filters(df, income_bands, population_bands)
 
-    scatter = make_opp_risk_scatter(opportunity_metric, risk_metric, selected_countries, color_metric=pcp_color, data_df=plot_df)
     bars = make_ranked_bar(metric, selected_countries, data_df=plot_df)
     dist = make_distribution(metric, selected_country, data_df=plot_df)
+    return bars, dist
 
-    return scatter, bars, dist
 
 @app.callback(
     Output("gap-scatter", "figure"),
     Output("gap-ranked", "figure"),
-    Input("pcp-selected-countries", "data"),
+    Input("selected-countries", "data"),
     Input("world-map", "clickData"),
     Input("income-band-filter", "value"),
     Input("population-band-filter", "value"),
@@ -1513,6 +1535,57 @@ def update_country_dashboard(country, income_bands, population_bands):
     rank_fig = make_ranked_bar("Real_GDP_per_Capita_USD", [country], data_df=peer_df)
 
     return econ_fig, labor_fig, infra_fig, rank_fig
+
+
+@app.callback(
+    Output("selected-countries", "data"),
+    Input("pcp-selected-countries", "data"),
+    Input("opp-risk-scatter", "selectedData"),
+    Input("pcp-reset", "n_clicks"),
+    Input("income-band-filter", "value"),
+    Input("population-band-filter", "value"),
+    State("selected-countries", "data"),
+)
+def sync_selected_countries(pcp_selected, scatter_selected, _reset_clicks,
+                           income_bands, population_bands, current_selected):
+    ctx = callback_context.triggered[0]["prop_id"] if callback_context.triggered else ""
+
+    peer_df = apply_peer_filters(df, income_bands, population_bands)
+    peer_set = set(peer_df[COUNTRY_COL].dropna().tolist())
+
+    def _intersect(countries):
+        countries = countries or []
+        out = []
+        seen = set()
+        for c in countries:
+            if c and c in peer_set and c not in seen:
+                seen.add(c)
+                out.append(c)
+        return out
+
+    if "pcp-reset" in ctx:
+        return []
+
+    if "opp-risk-scatter.selectedData" in ctx:
+        if not scatter_selected or not scatter_selected.get("points"):
+            return []
+        countries = []
+        for p in scatter_selected["points"]:
+            cd = p.get("customdata")
+            if isinstance(cd, (list, tuple)) and len(cd) > 0:
+                countries.append(cd[0])
+            else:
+                ht = p.get("hovertext")
+                if ht:
+                    countries.append(ht)
+        return _intersect(countries)
+
+    if "pcp-selected-countries.data" in ctx:
+        return _intersect(pcp_selected)
+
+    # if peer filters changed (or anything else), keep selection but clip to peer set
+    return _intersect(current_selected)
+
 
 if __name__ == "__main__":
     app.run(debug=True)
