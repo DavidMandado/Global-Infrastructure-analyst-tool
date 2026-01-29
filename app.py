@@ -1,4 +1,4 @@
-from dash import Dash, html, dcc, Input, Output, State, callback_context
+from dash import Dash, html, dcc, dash_table, Input, Output, State, callback_context
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -14,7 +14,7 @@ from typing import Optional
 app = Dash(__name__)
 
 THEME = {
-    "background": "#F6F7FB",   # page background (very light gray)
+    "background": "#989898",   # page background (very light gray)
     "panel": "#FFFFFF",        # card background
     "panel_alt": "#F3F4F6",    # subtle alt background
     "text": "#111827",         # near-black text
@@ -27,8 +27,8 @@ THEME = {
 # -----------------------------------------------------------------------------
 pio.templates["infra_light"] = go.layout.Template(
     layout=dict(
-        paper_bgcolor=THEME["panel"],
-        plot_bgcolor=THEME["panel"],
+        paper_bgcolor=THEME["panel"],          # card/figure outer area stays white
+        plot_bgcolor=THEME["panel_alt"],       # ✅ plotting area gets light gray
         font=dict(
             family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
             color=THEME["text"],
@@ -36,9 +36,20 @@ pio.templates["infra_light"] = go.layout.Template(
         ),
         margin=dict(l=0, r=0, t=0, b=0),
         legend=dict(bgcolor="rgba(0,0,0,0)"),
+
+        # ✅ subtle grid so the gray plot area reads cleanly
+        xaxis=dict(
+            gridcolor="rgba(17,24,39,0.08)",
+            zerolinecolor="rgba(17,24,39,0.10)",
+        ),
+        yaxis=dict(
+            gridcolor="rgba(17,24,39,0.08)",
+            zerolinecolor="rgba(17,24,39,0.10)",
+        ),
     )
 )
-pio.templates.default = "infra_light"
+
+
 
 # -----------------------------------------------------------------------------
 # Data (load + clean + derive)
@@ -343,6 +354,177 @@ GLOBAL_COLOR_METRIC = (
     else (numeric_cols[0] if numeric_cols else None)
 )
 GLOBAL_COLORSCALE = "Viridis"
+
+# --------------------------------------------------------------------------
+# Analyst score builder (weighted composite)
+# --------------------------------------------------------------------------
+SCORE_SLOTS = 4
+
+DEFAULT_SCORE_METRICS = [
+    "Real_GDP_per_Capita_USD",
+    "electricity_access_percent",
+    "fixed_broadband_per_100",
+    "roadways_km_per_1k",
+]
+DEFAULT_SCORE_WEIGHTS = [3, 2, 2, 1]   # relative weights (0 disables a metric)
+DEFAULT_SCORE_DIRS = ["high", "high", "high", "high"]  # "high" or "low"
+
+def _safe_pct(series: pd.Series) -> pd.Series:
+    s = pd.to_numeric(series, errors="coerce")
+    if s.notna().sum() == 0:
+        return pd.Series([np.nan] * len(series), index=series.index)
+    return s.rank(pct=True)
+
+def build_score_spec(metrics, weights, dirs):
+    spec = []
+    for m, w, d in zip(metrics, weights, dirs):
+        if m and (w is not None) and float(w) > 0 and (m in df.columns):
+            spec.append({"metric": m, "weight": float(w), "direction": (d or "high")})
+    return spec
+
+def compute_weighted_score(data_df: pd.DataFrame, spec: list[dict]) -> pd.DataFrame:
+    """
+    Returns df with columns:
+      Country, score_0_100
+    Score is weighted mean of per-metric percentiles (0..1), optionally inverted for "low".
+    Rows with missing metrics re-normalize weights by available metrics.
+    """
+    out = pd.DataFrame({COUNTRY_COL: data_df[COUNTRY_COL].astype("string")})
+
+    if not spec:
+        out["score_0_100"] = np.nan
+        return out
+
+    pct_cols = []
+    w_cols = []
+
+    for i, item in enumerate(spec):
+        m = item["metric"]
+        w = float(item["weight"])
+        direction = item["direction"]
+
+        pct = _safe_pct(col_as_series(data_df, m))
+        if direction == "low":
+            pct = 1.0 - pct
+
+        col_pct = f"_pct_{i}"
+        col_w = f"_w_{i}"
+        out[col_pct] = pct
+        out[col_w] = w
+
+        pct_cols.append(col_pct)
+        w_cols.append(col_w)
+
+    pct_mat = out[pct_cols].to_numpy(dtype=float)
+    w_vecs = out[w_cols].to_numpy(dtype=float)
+
+    # mask where pct is valid
+    valid = ~np.isnan(pct_mat)
+
+    # effective weights only where valid
+    eff_w = np.where(valid, w_vecs, 0.0)
+
+    denom = eff_w.sum(axis=1)
+    numer = (pct_mat * eff_w).sum(axis=1)
+
+    score01 = np.where(denom > 0, numer / denom, np.nan)
+    out["score_0_100"] = score01 * 100.0
+    return out
+
+def make_score_ranked_bar(score_df: pd.DataFrame, selected_countries: list[str], selected_country: Optional[str]):
+    s = pd.to_numeric(score_df["score_0_100"], errors="coerce")
+    plot_df = pd.DataFrame({COUNTRY_COL: score_df[COUNTRY_COL], "_score": s}).dropna(subset=["_score"])
+    if plot_df.empty:
+        fig = go.Figure().update_layout(template="infra_light")
+        return fig
+
+    plot_df = plot_df.sort_values("_score", ascending=False)
+    top = plot_df.head(12)
+    bottom = plot_df.tail(12)
+    out = pd.concat([top, bottom], axis=0).drop_duplicates(subset=[COUNTRY_COL], keep="first")
+    out = out.sort_values("_score", ascending=True)
+
+    fig = px.bar(
+        out,
+        x="_score",
+        y=COUNTRY_COL,
+        orientation="h",
+        color="_score",
+        color_continuous_scale=GLOBAL_COLORSCALE,
+        template="infra_light",
+        labels={"_score": "Composite score (0–100)", COUNTRY_COL: ""},
+    )
+    fig.update_layout(coloraxis_showscale=False)
+
+    # highlight subset selection (from PCP/scatter)
+    selected_countries = selected_countries or []
+    if selected_countries:
+        sel = out[out[COUNTRY_COL].isin(selected_countries)]
+        if not sel.empty:
+            fig.add_trace(
+                go.Bar(
+                    x=sel["_score"],
+                    y=sel[COUNTRY_COL],
+                    orientation="h",
+                    marker=dict(color="rgba(59,130,246,0.95)", line=dict(color="white", width=1.5)),
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+
+    # highlight clicked country
+    if selected_country:
+        row = out[out[COUNTRY_COL] == selected_country]
+        if not row.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=row["_score"],
+                    y=row[COUNTRY_COL],
+                    mode="markers",
+                    marker=dict(size=14, symbol="star"),
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+
+    fig.update_traces(
+        hovertemplate="<b>%{y}</b><br>Score: %{x:.1f}<extra></extra>",
+        opacity=0.92,
+    )
+    fig = card_layout(fig, x_title="Composite score (0–100)")
+    return fig
+
+def make_score_distribution(score_df: pd.DataFrame, selected_country: Optional[str]):
+    s = pd.to_numeric(score_df["score_0_100"], errors="coerce").dropna()
+    if s.empty:
+        fig = go.Figure().update_layout(template="infra_light")
+        return fig
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Histogram(
+            x=s,
+            nbinsx=25,
+            marker_color="rgba(17,24,39,0.35)",
+            hovertemplate="Score range<br>Count: %{y}<extra></extra>",
+        )
+    )
+
+    for q in [0.25, 0.5, 0.75]:
+        fig.add_vline(x=s.quantile(q), line_width=1, line_dash="dot", line_color=THEME["muted_text"])
+
+    if selected_country:
+        row = score_df[score_df[COUNTRY_COL] == selected_country]
+        if not row.empty:
+            val = pd.to_numeric(row["score_0_100"].iloc[0], errors="coerce")
+            if pd.notna(val):
+                fig.add_vrect(x0=val, x1=val, fillcolor="rgba(59,130,246,0.15)", line_width=0)
+                fig.add_vline(x=val, line_width=2, line_color="rgba(59,130,246,0.95)")
+
+    fig.update_layout(template="infra_light", showlegend=False, margin=dict(l=10, r=10, t=10, b=10))
+    fig = card_layout(fig, x_title="Composite score (0–100)", y_title="Countries")
+    return fig
+
 
 def col_as_series(frame: pd.DataFrame, col: str) -> pd.Series:
     """
@@ -957,39 +1139,23 @@ def make_gap_ranked_bar(
     return fig
 
 def card_layout(fig, *, x_title=None, y_title=None):
+    # Use real axis titles + automargins (prevents spillover into other panels)
     fig.update_layout(
-        margin=dict(l=48, r=16, t=8, b=40),
-        xaxis=dict(title=None, tickfont=dict(size=11)),
-        yaxis=dict(title=None, tickfont=dict(size=11)),
+        margin=dict(l=70, r=24, t=12, b=60),
     )
 
-    annotations = []
-    if x_title:
-        annotations.append(
-            dict(
-                text=x_title,
-                x=0.5,
-                y=-0.18,
-                xref="paper",
-                yref="paper",
-                showarrow=False,
-                font=dict(size=11, color=THEME["muted_text"]),
-            )
-        )
-    if y_title:
-        annotations.append(
-            dict(
-                text=y_title,
-                x=-0.12,
-                y=0.5,
-                xref="paper",
-                yref="paper",
-                showarrow=False,
-                textangle=-90,
-                font=dict(size=11, color=THEME["muted_text"]),
-            )
-        )
-    fig.update_layout(annotations=annotations)
+    fig.update_xaxes(
+        title_text=(x_title or ""),
+        automargin=True,
+        title_font=dict(size=11, color=THEME["muted_text"]),
+        tickfont=dict(size=11),
+    )
+    fig.update_yaxes(
+        title_text=(y_title or ""),
+        automargin=True,
+        title_font=dict(size=11, color=THEME["muted_text"]),
+        tickfont=dict(size=11),
+    )
     return fig
 
 
@@ -1197,77 +1363,250 @@ app.layout = html.Div(
                     ],
                 ),
 
+
+            html.Div(
+    className="app-grid2",
+    children=[
+        # ------------------------------------------------------------
+        # Row 1: big scatter + 2 small plots (same row)
+        # ------------------------------------------------------------
+        html.Div(
+            className="panel panel-big",
+            style={"gridColumn": "span 2"},
+            children=[
+                html.Div("Opportunity vs Risk (Global)", className="panel-title"),
+                dcc.Graph(
+                    id="opp-risk-scatter",
+                    className="panel-content",
+                    style={"height": "100%"},
+                    config={"displayModeBar": False, "responsive": True},
+                ),
+            ],
+        ),
+        html.Div(
+            className="panel panel-small",
+            style={"gridColumn": "span 1"},
+            children=[
+                html.Div("Top / Bottom Countries", className="panel-title"),
+                dcc.Graph(
+                    id="ranked-bar",
+                    className="panel-content",
+                    style={"height": "100%"},
+                    config={"displayModeBar": False, "responsive": True},
+                ),
+            ],
+        ),
+        html.Div(
+            className="panel panel-small",
+            style={"gridColumn": "span 1"},
+            children=[
+                html.Div("Gap leaders / laggards", className="panel-title"),
+                dcc.Graph(
+                    id="gap-ranked",
+                    className="panel-content",
+                    style={"height": "100%"},
+                    config={"displayModeBar": False, "responsive": True},
+                ),
+            ],
+        ),
+
+        # ------------------------------------------------------------
+        # Row 2: 2 panels per row
+        # ------------------------------------------------------------
+        html.Div(
+            className="panel panel-tall",
+            style={"gridColumn": "span 2"},
+            children=[
+                html.Div("Infrastructure vs GDP (Gap view)", className="panel-title"),
+                dcc.Graph(
+                    id="gap-scatter",
+                    className="panel-content",
+                    style={"height": "100%"},
+                    config={"displayModeBar": False, "responsive": True},
+                ),
+            ],
+        ),
+        html.Div(
+            className="panel panel-tall",
+            style={"gridColumn": "span 2"},
+            children=[
+                html.Div("Composite Score Ranking (Top/Bottom)", className="panel-title"),
+                dcc.Graph(
+                    id="score-ranked",
+                    className="panel-content",
+                    style={"height": "100%"},
+                    config={"displayModeBar": False, "responsive": True},
+                ),
                 html.Div(
-                    className="app-grid2",
+                    style={"padding": "0 10px 10px 10px"},
                     children=[
-                        html.Div(
-                            className="panel panel-tall",
-                            style={"gridColumn": "span 2"},
-                            children=[
-                                html.Div("Opportunity vs Risk (Global)", className="panel-title"),
-                                dcc.Graph(
-                                    id="opp-risk-scatter",
-                                    className="panel-content",
-                                    config={"displayModeBar": False, "responsive": True},
-                                ),
+                        html.Div("Top candidates (peer-filtered)", className="control-label"),
+                        dash_table.DataTable(
+                            id="score-table",
+                            columns=[
+                                {"name": "Rank", "id": "rank"},
+                                {"name": "Country", "id": "country"},
+                                {"name": "Score", "id": "score"},
                             ],
+                            data=[],
+                            page_size=8,
+                            style_table={"overflowX": "auto"},
+                            style_cell={
+                                "fontFamily": "system-ui",
+                                "fontSize": "12px",
+                                "padding": "6px",
+                                "backgroundColor": THEME["panel"],
+                                "color": THEME["text"],
+                                "border": f"1px solid {THEME['border']}",
+                            },
+                            style_header={"fontWeight": "600", "backgroundColor": THEME["panel_alt"]},
                         ),
-                        html.Div(
-                            className="panel",
-                            style={"gridColumn": "span 2"},
-                            children=[
-                                html.Div("Top / Bottom Countries", className="panel-title"),
-                                dcc.Graph(
-                                    id="ranked-bar",
-                                    className="panel-content",
-                                    config={"displayModeBar": False, "responsive": True},
-                                ),
-                            ],
-                        ),
-                        html.Div(
-                            className="panel",
-                            style={"gridColumn": "span 2"},
-                            children=[
-                                html.Div("Global Distribution Context", className="panel-title"),
-                                dcc.Graph(
-                                    id="metric-distribution",
-                                    className="panel-content",
-                                    config={"displayModeBar": False, "responsive": True},
-                                ),
-                            ],
-                        ),
-                        html.Div(
-                            className="panel",
-                            style={"gridColumn": "span 2"},
-                            children=[
-                                html.Div("Infrastructure vs GDP (Gap view)", className="panel-title"),
-                                dcc.Graph(
-                                    id="gap-scatter",
-                                    className="panel-content",
-                                    config={"displayModeBar": False, "responsive": True},
-                                ),
-                            ],
-                        ),
-                        html.Div(
-                            className="panel",
-                            children=[
-                                html.Div("Gap leaders / laggards", className="panel-title"),
-                                dcc.Graph(
-                                    id="gap-ranked",
-                                    className="panel-content",
-                                    config={"displayModeBar": False, "responsive": True},
-                                ),
-                            ],
-                        ),
-                        html.Div(className="panel", children=[html.Div("View 6", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                        html.Div(className="panel", children=[html.Div("View 7", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                        html.Div(className="panel", children=[html.Div("View 8", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                        html.Div(className="panel", children=[html.Div("View 9", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                        html.Div(className="panel", children=[html.Div("View 10", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                        html.Div(className="panel", children=[html.Div("View 11", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-                        html.Div(className="panel", children=[html.Div("View 12", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
                     ],
                 ),
+            ],
+        ),
+
+        # ------------------------------------------------------------
+        # Row 3: 2 panels per row
+        # ------------------------------------------------------------
+        html.Div(
+            className="panel panel-tall",
+            style={"gridColumn": "span 2"},
+            children=[
+                html.Div("Analyst Score Builder (weighted)", className="panel-title"),
+                html.Div(
+                    style={"padding": "0 8px 8px 8px", "display": "grid", "gap": "10px"},
+                    children=[
+                        html.Div(
+                            "Pick up to 4 metrics, choose direction, and assign weights (0 disables a metric).",
+                            className="control-label",
+                        ),
+
+                        html.Div(
+                            style={"display": "grid", "gridTemplateColumns": "1fr 140px", "gap": "8px", "alignItems": "center"},
+                            children=[
+                                dcc.Dropdown(
+                                    id="score-metric-1",
+                                    className="light-dropdown",
+                                    options=[{"label": label_for(c), "value": c} for c in numeric_cols],
+                                    value=DEFAULT_SCORE_METRICS[0] if DEFAULT_SCORE_METRICS[0] in df.columns else None,
+                                    clearable=True,
+                                    placeholder="Metric 1",
+                                ),
+                                dcc.RadioItems(
+                                    id="score-direction-1",
+                                    options=[{"label": "High→good", "value": "high"}, {"label": "Low→good", "value": "low"}],
+                                    value=DEFAULT_SCORE_DIRS[0],
+                                    inline=True,
+                                ),
+                            ],
+                        ),
+                        dcc.Slider(id="score-weight-1", min=0, max=5, step=1, value=DEFAULT_SCORE_WEIGHTS[0],
+                                   marks={0: "0", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5"}),
+
+                        html.Div(
+                            style={"display": "grid", "gridTemplateColumns": "1fr 140px", "gap": "8px", "alignItems": "center"},
+                            children=[
+                                dcc.Dropdown(
+                                    id="score-metric-2",
+                                    className="light-dropdown",
+                                    options=[{"label": label_for(c), "value": c} for c in numeric_cols],
+                                    value=DEFAULT_SCORE_METRICS[1] if DEFAULT_SCORE_METRICS[1] in df.columns else None,
+                                    clearable=True,
+                                    placeholder="Metric 2",
+                                ),
+                                dcc.RadioItems(
+                                    id="score-direction-2",
+                                    options=[{"label": "High→good", "value": "high"}, {"label": "Low→good", "value": "low"}],
+                                    value=DEFAULT_SCORE_DIRS[1],
+                                    inline=True,
+                                ),
+                            ],
+                        ),
+                        dcc.Slider(id="score-weight-2", min=0, max=5, step=1, value=DEFAULT_SCORE_WEIGHTS[1],
+                                   marks={0: "0", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5"}),
+
+                        html.Div(
+                            style={"display": "grid", "gridTemplateColumns": "1fr 140px", "gap": "8px", "alignItems": "center"},
+                            children=[
+                                dcc.Dropdown(
+                                    id="score-metric-3",
+                                    className="light-dropdown",
+                                    options=[{"label": label_for(c), "value": c} for c in numeric_cols],
+                                    value=DEFAULT_SCORE_METRICS[2] if DEFAULT_SCORE_METRICS[2] in df.columns else None,
+                                    clearable=True,
+                                    placeholder="Metric 3",
+                                ),
+                                dcc.RadioItems(
+                                    id="score-direction-3",
+                                    options=[{"label": "High→good", "value": "high"}, {"label": "Low→good", "value": "low"}],
+                                    value=DEFAULT_SCORE_DIRS[2],
+                                    inline=True,
+                                ),
+                            ],
+                        ),
+                        dcc.Slider(id="score-weight-3", min=0, max=5, step=1, value=DEFAULT_SCORE_WEIGHTS[2],
+                                   marks={0: "0", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5"}),
+
+                        html.Div(
+                            style={"display": "grid", "gridTemplateColumns": "1fr 140px", "gap": "8px", "alignItems": "center"},
+                            children=[
+                                dcc.Dropdown(
+                                    id="score-metric-4",
+                                    className="light-dropdown",
+                                    options=[{"label": label_for(c), "value": c} for c in numeric_cols],
+                                    value=DEFAULT_SCORE_METRICS[3] if DEFAULT_SCORE_METRICS[3] in df.columns else None,
+                                    clearable=True,
+                                    placeholder="Metric 4",
+                                ),
+                                dcc.RadioItems(
+                                    id="score-direction-4",
+                                    options=[{"label": "High→good", "value": "high"}, {"label": "Low→good", "value": "low"}],
+                                    value=DEFAULT_SCORE_DIRS[3],
+                                    inline=True,
+                                ),
+                            ],
+                        ),
+                        dcc.Slider(id="score-weight-4", min=0, max=5, step=1, value=DEFAULT_SCORE_WEIGHTS[3],
+                                   marks={0: "0", 1: "1", 2: "2", 3: "3", 4: "4", 5: "5"}),
+
+                        html.Div(
+                            style={"display": "flex", "gap": "10px", "alignItems": "center"},
+                            children=[
+                                html.Button("Reset score builder", id="score-reset", n_clicks=0, className="btn"),
+                                html.Div(id="score-status", className="status-pill", children="Score: not computed yet"),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        ),
+        html.Div(
+            className="panel panel-tall",
+            style={"gridColumn": "span 2"},
+            children=[
+                html.Div("Composite Score Distribution", className="panel-title"),
+                dcc.Graph(
+                    id="score-dist",
+                    className="panel-content",
+                    style={"height": "100%"},
+                    config={"displayModeBar": False, "responsive": True},
+                ),
+            ],
+        ),
+
+        # Optional placeholders (2 per row)
+        html.Div(className="panel", style={"gridColumn": "span 2"},
+                 children=[html.Div("View 9", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+        html.Div(className="panel", style={"gridColumn": "span 2"},
+                 children=[html.Div("View 10", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+        html.Div(className="panel", style={"gridColumn": "span 2"},
+                 children=[html.Div("View 11", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+        html.Div(className="panel", style={"gridColumn": "span 2"},
+                 children=[html.Div("View 12", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
+    ],
+),
+
             ],
         ),
 
@@ -1415,23 +1754,15 @@ def update_opp_risk_scatter(metric, pcp_color, income_bands, population_bands):
 
 @app.callback(
     Output("ranked-bar", "figure"),
-    Output("metric-distribution", "figure"),
     Input("map-metric", "value"),
     Input("selected-countries", "data"),
-    Input("world-map", "clickData"),
     Input("income-band-filter", "value"),
     Input("population-band-filter", "value"),
 )
-def update_bar_and_distribution(metric, selected_countries, map_click, income_bands, population_bands):
-    selected_country = None
-    if map_click:
-        selected_country = map_click["points"][0]["location"]
-
+def update_ranked_bar(metric, selected_countries, income_bands, population_bands):
     plot_df = apply_peer_filters(df, income_bands, population_bands)
+    return make_ranked_bar(metric, selected_countries or [], data_df=plot_df)
 
-    bars = make_ranked_bar(metric, selected_countries, data_df=plot_df)
-    dist = make_distribution(metric, selected_country, data_df=plot_df)
-    return bars, dist
 
 
 @app.callback(
@@ -1457,10 +1788,11 @@ def update_gap_views(selected_countries, map_click, income_bands, population_ban
 @app.callback(
     Output("active-country", "data"),
     Input("world-map", "clickData"),
+    Input("score-ranked", "clickData"),
     Input("pcp-reset", "n_clicks"),
     Input("back-to-global", "n_clicks"),
 )
-def set_active_country(map_click, reset_clicks, back_clicks):
+def set_active_country(map_click, score_click, reset_clicks, back_clicks):
     ctx = (callback_context.triggered[0]["prop_id"] if callback_context.triggered else "")
 
     if "pcp-reset" in ctx or "back-to-global" in ctx:
@@ -1469,7 +1801,12 @@ def set_active_country(map_click, reset_clicks, back_clicks):
     if "world-map" in ctx and map_click:
         return map_click["points"][0]["location"]
 
+    if "score-ranked" in ctx and score_click:
+        # horizontal bar: country is on y
+        return score_click["points"][0].get("y")
+
     return None
+
 
 @app.callback(
     Output("global-view", "style"),
@@ -1585,6 +1922,91 @@ def sync_selected_countries(pcp_selected, scatter_selected, _reset_clicks,
 
     # if peer filters changed (or anything else), keep selection but clip to peer set
     return _intersect(current_selected)
+
+
+@app.callback(
+    Output("score-metric-1", "value"),
+    Output("score-weight-1", "value"),
+    Output("score-direction-1", "value"),
+    Output("score-metric-2", "value"),
+    Output("score-weight-2", "value"),
+    Output("score-direction-2", "value"),
+    Output("score-metric-3", "value"),
+    Output("score-weight-3", "value"),
+    Output("score-direction-3", "value"),
+    Output("score-metric-4", "value"),
+    Output("score-weight-4", "value"),
+    Output("score-direction-4", "value"),
+    Input("score-reset", "n_clicks"),
+    prevent_initial_call=True,
+)
+def reset_score_builder(_n):
+    vals = []
+    for i in range(SCORE_SLOTS):
+        m = DEFAULT_SCORE_METRICS[i] if DEFAULT_SCORE_METRICS[i] in df.columns else None
+        vals.extend([m, DEFAULT_SCORE_WEIGHTS[i], DEFAULT_SCORE_DIRS[i]])
+    return vals
+
+
+@app.callback(
+    Output("score-ranked", "figure"),
+    Output("score-dist", "figure"),
+    Output("score-table", "data"),
+    Output("score-status", "children"),
+    Input("score-metric-1", "value"),
+    Input("score-weight-1", "value"),
+    Input("score-direction-1", "value"),
+    Input("score-metric-2", "value"),
+    Input("score-weight-2", "value"),
+    Input("score-direction-2", "value"),
+    Input("score-metric-3", "value"),
+    Input("score-weight-3", "value"),
+    Input("score-direction-3", "value"),
+    Input("score-metric-4", "value"),
+    Input("score-weight-4", "value"),
+    Input("score-direction-4", "value"),
+    Input("selected-countries", "data"),
+    Input("world-map", "clickData"),
+    Input("income-band-filter", "value"),
+    Input("population-band-filter", "value"),
+)
+def update_score_views(m1, w1, d1, m2, w2, d2, m3, w3, d3, m4, w4, d4,
+                       selected_countries, map_click, income_bands, population_bands):
+
+    selected_country = None
+    if map_click:
+        selected_country = map_click["points"][0]["location"]
+
+    plot_df = apply_peer_filters(df, income_bands, population_bands)
+
+    spec = build_score_spec(
+        metrics=[m1, m2, m3, m4],
+        weights=[w1, w2, w3, w4],
+        dirs=[d1, d2, d3, d4],
+    )
+
+    if not spec:
+        empty = go.Figure().update_layout(template="infra_light")
+        return empty, empty, [], "Score: select ≥1 metric with weight > 0"
+
+    score_df = compute_weighted_score(plot_df, spec)
+    bar = make_score_ranked_bar(score_df, selected_countries or [], selected_country)
+    dist = make_score_distribution(score_df, selected_country)
+
+    # top table
+    t = score_df[[COUNTRY_COL, "score_0_100"]].copy()
+    t["score_0_100"] = pd.to_numeric(t["score_0_100"], errors="coerce")
+    t = t.dropna(subset=["score_0_100"]).sort_values("score_0_100", ascending=False).head(12)
+
+    table_data = [
+        {"rank": i + 1, "country": row[COUNTRY_COL], "score": f"{row['score_0_100']:.1f}"}
+        for i, (_, row) in enumerate(t.iterrows())
+    ]
+
+    metric_txt = ", ".join([f"{label_for(x['metric'])}×{int(x['weight'])}" for x in spec])
+    status = f"Score: {metric_txt} (peer-filtered n={len(plot_df)})"
+
+    return bar, dist, table_data, status
 
 
 if __name__ == "__main__":
