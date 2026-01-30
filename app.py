@@ -1967,16 +1967,6 @@ app.layout = html.Div(
                 ),
             ],
         ),
-
-        # Optional placeholders (2 per row)
-        html.Div(className="panel", style={"gridColumn": "span 2"},
-                 children=[html.Div("View 9", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-        html.Div(className="panel", style={"gridColumn": "span 2"},
-                 children=[html.Div("View 10", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-        html.Div(className="panel", style={"gridColumn": "span 2"},
-                 children=[html.Div("View 11", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
-        html.Div(className="panel", style={"gridColumn": "span 2"},
-                 children=[html.Div("View 12", className="panel-title"), html.Div("Placeholder", className="panel-placeholder")]),
     ],
 ),
 
