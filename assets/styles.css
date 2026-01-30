@@ -48,7 +48,6 @@ body {
     display: flex;
     flex-direction: column;
 
-    /* ✅ stronger separation */
     border: 1px solid rgba(17, 24, 39, 0.16);
     box-shadow:
         0 1px 0 rgba(17, 24, 39, 0.04),
@@ -82,18 +81,23 @@ body {
 .panel-content {
     flex: 1 1 auto;
     min-height: 0;
-    /* critical for plot sizing */
 }
 
-/* Placeholder */
-.panel-placeholder {
-    flex: 1 1 auto;
+
+.score-panel {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--muted);
-    font-size: 0.95rem;
+    flex-direction: column;
 }
+
+.score-panel .panel-content {
+    flex: 0 0 auto;
+}
+
+.score-panel .score-table-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
 
 /* Top row: map + side panel */
 .top-row {
@@ -121,14 +125,12 @@ body {
     background: var(--panel);
 }
 
-/* Plotly layers default to transparent so the inset surface shows */
 .js-plotly-plot,
 .plot-container,
 .svg-container {
     background: transparent !important;
 }
 
-/* Inset chart surface for graphs (NOT for panel-tight map/pcp) */
 .panel:not(.panel-tight) .panel-content {
     background: var(--panelAlt);
     border: 1px solid var(--border);
@@ -137,14 +139,12 @@ body {
     box-shadow: inset 0 1px 0 rgba(17, 24, 39, 0.04);
 }
 
-/* Ensure Plotly canvas doesn't paint over the inset surface */
 .panel:not(.panel-tight) .panel-content .js-plotly-plot,
 .panel:not(.panel-tight) .panel-content .plot-container,
 .panel:not(.panel-tight) .panel-content .svg-container {
     background: transparent !important;
 }
 
-/* Inset surface for dash tables */
 .panel .dash-table-container,
 .panel .dash-spreadsheet-container {
     background: var(--panelAlt);
@@ -158,7 +158,6 @@ body {
 }
 
 
-/* Main grid container for global view */
 .app-grid2 {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -168,10 +167,6 @@ body {
     align-items: start;
     margin-top: 15px;
 }
-
-/* -------------------------------------------------------------------------- */
-/* Grid height helpers - use only min-height to allow safe expansion           */
-/* -------------------------------------------------------------------------- */
 
 .panel-big {
     min-height: 560px;
@@ -191,7 +186,6 @@ body {
     height: auto;
 }
 
-/* Responsive grid layout */
 @media (max-width: 1400px) {
     .app-grid2 {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -214,10 +208,6 @@ body {
         grid-template-columns: 1fr;
     }
 }
-
-/* -------------------------------------------------------------------------- */
-/* Light dropdown styling (react-select)                                       */
-/* -------------------------------------------------------------------------- */
 
 .light-dropdown .Select-control {
     background-color: var(--panelAlt) !important;
@@ -276,10 +266,6 @@ body {
     background-color: rgba(59, 130, 246, 0.18) !important;
 }
 
-/* -------------------------------------------------------------------------- */
-/* PCP control area                                                            */
-/* -------------------------------------------------------------------------- */
-
 .pcp-controls {
     padding: 8px 10px 6px 10px;
     display: grid;
@@ -307,6 +293,9 @@ body {
 .radio-row {
     padding-top: 4px;
     color: var(--text);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 
 .pcp-actions {
@@ -340,12 +329,9 @@ body {
     border-radius: 999px;
     padding: 8px 10px;
     font-size: 0.85rem;
-    white-space: nowrap;
+    white-space: normal;
+    max-width: 100%;
 }
-
-/* -------------------------------------------------------------------------- */
-/* Peer filter bar                                                             */
-/* -------------------------------------------------------------------------- */
 
 .peer-filter-bar {
     display: flex;
@@ -359,9 +345,6 @@ body {
     flex-wrap: wrap;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Global investor summary row                                                 */
-/* -------------------------------------------------------------------------- */
 
 .summary-row {
     display: grid;
@@ -382,9 +365,6 @@ body {
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Country KPI strip                                                           */
-/* -------------------------------------------------------------------------- */
 
 .country-kpi-strip {
     display: grid;
@@ -420,4 +400,28 @@ body {
     color: var(--muted);
     font-size: 0.8rem;
     margin-top: 2px;
+}
+
+
+.score-builder {
+    min-width: 0;
+}
+
+.score-builder>div {
+    min-width: 0;
+}
+
+.score-builder .rc-slider {
+    margin: 6px 6px 18px 6px;
+}
+
+.score-builder .rc-slider-mark-text {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.score-builder .rc-slider-dot,
+.score-builder .rc-slider-mark-text {
+    pointer-events: none;
 }

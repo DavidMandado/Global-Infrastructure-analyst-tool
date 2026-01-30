@@ -8,9 +8,7 @@ import re
 from typing import Optional
 
 
-# -----------------------------------------------------------------------------
 # App
-# -----------------------------------------------------------------------------
 app = Dash(__name__)
 
 THEME = {
@@ -22,9 +20,6 @@ THEME = {
     "border": "rgba(17,24,39,0.10)",
 }
 
-# -----------------------------------------------------------------------------
-# Plotly template (light)
-# -----------------------------------------------------------------------------
 pio.templates["infra_light"] = go.layout.Template(
     layout=dict(
         paper_bgcolor="rgba(0,0,0,0)",
@@ -37,7 +32,6 @@ pio.templates["infra_light"] = go.layout.Template(
         margin=dict(l=0, r=0, t=0, b=0),
         legend=dict(bgcolor="rgba(0,0,0,0)"),
 
-        # ✅ subtle grid so the gray plot area reads cleanly
         xaxis=dict(
             gridcolor="rgba(17,24,39,0.08)",
             zerolinecolor="rgba(17,24,39,0.10)",
@@ -51,9 +45,7 @@ pio.templates["infra_light"] = go.layout.Template(
 
 
 
-# -----------------------------------------------------------------------------
 # Data (load + clean + derive)
-# -----------------------------------------------------------------------------
 COUNTRY_COL = "Country"
 EXCLUDED_ENTITIES = {"world"}
 
@@ -84,7 +76,7 @@ def _parse_numeric_series(s: pd.Series) -> pd.Series:
         }
     )
     ss = ss.str.replace(",", "", regex=False)
-    ss = ss.str.replace("−", "-", regex=False)  # unicode minus
+    ss = ss.str.replace("−", "-", regex=False)  
     extracted = ss.str.extract(r"([-+]?\d*\.?\d+)", expand=False)
     return pd.to_numeric(extracted, errors="coerce")
 
@@ -222,9 +214,7 @@ def load_and_prepare_data(csv_path: str) -> pd.DataFrame:
 
 df = load_and_prepare_data("data/CIA_DATA.csv")
 
-# -----------------------------------------------------------------------------
 # Derived peer groups (no new data required)
-# -----------------------------------------------------------------------------
 if "gdp_pc_pct" in df.columns:
     df["income_band"] = pd.cut(
         df["gdp_pc_pct"],
@@ -270,6 +260,12 @@ def apply_peer_filters(base_df: pd.DataFrame, income_bands, population_bands) ->
     if population_bands:
         out = out[out["population_band"].isin(population_bands)]
     return out
+
+
+def apply_selection_filter(base_df: pd.DataFrame, selected_countries) -> pd.DataFrame:
+    if selected_countries:
+        return base_df[base_df[COUNTRY_COL].isin(selected_countries)]
+    return base_df
 
 
 DEFAULT_METRIC = "Real_GDP_per_Capita_USD" if "Real_GDP_per_Capita_USD" in df.columns else None
@@ -351,9 +347,7 @@ for g in buckets:
 if DEFAULT_METRIC is None and numeric_cols:
     DEFAULT_METRIC = numeric_cols[0]
 
-# -----------------------------------------------------------------------------
 # Global color encoding (used across summary plots)
-# -----------------------------------------------------------------------------
 GLOBAL_COLOR_METRIC = (
     "Real_GDP_per_Capita_USD"
     if "Real_GDP_per_Capita_USD" in df.columns
@@ -361,9 +355,7 @@ GLOBAL_COLOR_METRIC = (
 )
 GLOBAL_COLORSCALE = "Viridis"
 
-# --------------------------------------------------------------------------
 # Analyst score builder (weighted composite)
-# --------------------------------------------------------------------------
 SCORE_SLOTS = 4
 
 DEFAULT_SCORE_METRICS = [
@@ -435,10 +427,8 @@ def compute_weighted_score(data_df: pd.DataFrame, spec: list[dict]) -> pd.DataFr
     pct_mat = out[pct_cols].to_numpy(dtype=float)
     w_vecs = out[w_cols].to_numpy(dtype=float)
 
-    # mask where pct is valid
     valid = ~np.isnan(pct_mat)
 
-    # effective weights only where valid
     eff_w = np.where(valid, w_vecs, 0.0)
 
     denom = eff_w.sum(axis=1)
@@ -469,11 +459,11 @@ def make_score_ranked_bar(score_df: pd.DataFrame, selected_countries: list[str],
         color="_score",
         color_continuous_scale=GLOBAL_COLORSCALE,
         template="infra_light",
-        labels={"_score": "Composite score (0–100)", COUNTRY_COL: ""},
+        labels={"_score": "Composite score (0-100)", COUNTRY_COL: ""},
     )
     fig.update_layout(coloraxis_showscale=False)
+    fig.update_yaxes(categoryorder="array", categoryarray=out[COUNTRY_COL].tolist())
 
-    # highlight subset selection (from PCP/scatter)
     selected_countries = selected_countries or []
     if selected_countries:
         sel = out[out[COUNTRY_COL].isin(selected_countries)]
@@ -489,7 +479,6 @@ def make_score_ranked_bar(score_df: pd.DataFrame, selected_countries: list[str],
                 )
             )
 
-    # highlight clicked country
     if selected_country:
         row = out[out[COUNTRY_COL] == selected_country]
         if not row.empty:
@@ -553,9 +542,7 @@ def col_as_series(frame: pd.DataFrame, col: str) -> pd.Series:
         obj = obj.iloc[:, 0]
     return obj
 
-# -----------------------------------------------------------------------------
 # Figure builders
-# -----------------------------------------------------------------------------
 def make_map(metric: str, data_df: Optional[pd.DataFrame] = None):
     data_df = df if data_df is None else data_df
 
@@ -873,7 +860,7 @@ def make_opp_risk_scatter(
             color="_c",
             color_continuous_scale=GLOBAL_COLORSCALE,
             hover_name=COUNTRY_COL,
-            custom_data=[COUNTRY_COL],  # ✅ ADD THIS
+            custom_data=[COUNTRY_COL],  
             labels={"_x": label_for(x_metric), "_y": label_for(y_metric), "_c": label_for(color_metric)},
             template="infra_light",
         )
@@ -884,19 +871,17 @@ def make_opp_risk_scatter(
             x="_x",
             y="_y",
             hover_name=COUNTRY_COL,
-            custom_data=[COUNTRY_COL],  # ✅ ADD THIS
+            custom_data=[COUNTRY_COL], 
             labels={"_x": label_for(x_metric), "_y": label_for(y_metric)},
             template="infra_light",
         )
         fig.update_traces(marker=dict(color="rgba(17,24,39,0.55)"))
 
-    # ✅ Enable selection + keep it clean
     fig.update_layout(
-        dragmode="select",          # box-select by drag (works even with hidden modebar)
-        clickmode="event+select",   # click selects a point
+        dragmode="select",       
+        clickmode="event+select",  
     )
 
-    # ✅ Remove outlines on normal points (keeps colors readable)
     fig.update_traces(
         marker=dict(size=8, opacity=0.85, line=dict(width=0)),
         selector=dict(mode="markers"),
@@ -1162,7 +1147,6 @@ def make_gap_ranked_bar(
     return fig
 
 def card_layout(fig, *, x_title=None, y_title=None):
-    # Use real axis titles + automargins (prevents spillover into other panels)
     fig.update_layout(
         margin=dict(l=70, r=24, t=12, b=60),
     )
@@ -1673,9 +1657,7 @@ def build_country_metric_table(country, peer_df, metrics):
     return rows
 
 
-# -----------------------------------------------------------------------------
 # Layout
-# -----------------------------------------------------------------------------
 app.layout = html.Div(
     className="app-page",
     children=[
@@ -1685,8 +1667,8 @@ app.layout = html.Div(
             children="Click a country on the map to see more information.",
         ),
         dcc.Store(id="active-country", data=None),
-        dcc.Store(id="selected-countries", data=[]),        # shared multi-country selection (empty = no subset)
-        dcc.Store(id="selected-country-store", data=None),  # reserved for later (single country selection, not used yet)
+        dcc.Store(id="selected-countries", data=[]),      
+        dcc.Store(id="selected-country-store", data=None), 
         dcc.Store(id="country-active-metric", data=DEFAULT_COUNTRY_METRIC),
 
 
@@ -1882,9 +1864,7 @@ app.layout = html.Div(
             html.Div(
     className="app-grid2",
     children=[
-        # ------------------------------------------------------------
         # Row 1: big scatter + 2 small plots (same row)
-        # ------------------------------------------------------------
         html.Div(
             className="panel panel-big",
             style={"gridColumn": "span 2"},
@@ -1900,20 +1880,7 @@ app.layout = html.Div(
         ),
         html.Div(
             className="panel panel-small",
-            style={"gridColumn": "span 1"},
-            children=[
-                html.Div("Top / Bottom Countries", className="panel-title"),
-                dcc.Graph(
-                    id="ranked-bar",
-                    className="panel-content",
-                    style={"height": "100%"},
-                    config={"displayModeBar": False, "responsive": True},
-                ),
-            ],
-        ),
-        html.Div(
-            className="panel panel-small",
-            style={"gridColumn": "span 1"},
+            style={"gridColumn": "span 2"},
             children=[
                 html.Div("Gap leaders / laggards", className="panel-title"),
                 dcc.Graph(
@@ -1925,9 +1892,7 @@ app.layout = html.Div(
             ],
         ),
 
-        # ------------------------------------------------------------
         # Row 2: 2 panels per row
-        # ------------------------------------------------------------
         html.Div(
             className="panel panel-tall",
             style={"gridColumn": "span 2"},
@@ -1945,51 +1910,9 @@ app.layout = html.Div(
             className="panel panel-tall",
             style={"gridColumn": "span 2"},
             children=[
-                html.Div("Composite Score Ranking (Top/Bottom)", className="panel-title"),
-                dcc.Graph(
-                    id="score-ranked",
-                    className="panel-content",
-                    style={"height": "100%"},
-                    config={"displayModeBar": False, "responsive": True},
-                ),
-                html.Div(
-                    style={"padding": "0 10px 10px 10px"},
-                    children=[
-                        html.Div("Top candidates (peer-filtered)", className="control-label"),
-                        dash_table.DataTable(
-                            id="score-table",
-                            columns=[
-                                {"name": "Rank", "id": "rank"},
-                                {"name": "Country", "id": "country"},
-                                {"name": "Score", "id": "score"},
-                            ],
-                            data=[],
-                            page_size=8,
-                            style_table={"overflowX": "auto"},
-                            style_cell={
-                                "fontFamily": "system-ui",
-                                "fontSize": "12px",
-                                "padding": "6px",
-                                "backgroundColor": "transparent",
-                                "color": THEME["text"],
-                                "border": f"1px solid {THEME['border']}",
-                            },
-                            style_header={"fontWeight": "600", "backgroundColor": THEME["panel_alt"]},
-                        ),
-                    ],
-                ),
-            ],
-        ),
-
-        # ------------------------------------------------------------
-        # Row 3: 2 panels per row
-        # ------------------------------------------------------------
-        html.Div(
-            className="panel panel-tall",
-            style={"gridColumn": "span 2"},
-            children=[
                 html.Div("Analyst Score Builder (weighted)", className="panel-title"),
                 html.Div(
+                    className="score-builder",
                     style={"padding": "0 8px 8px 8px", "display": "grid", "gap": "10px"},
                     children=[
                         html.Div(
@@ -2091,6 +2014,48 @@ app.layout = html.Div(
                                 html.Button("Reset score builder", id="score-reset", n_clicks=0, className="btn"),
                                 html.Div(id="score-status", className="status-pill", children="Score: not computed yet"),
                             ],
+                        ),
+                    ],
+                ),
+            ],
+        ),
+
+        # Row 3: 2 panels per row
+        html.Div(
+            className="panel panel-tall score-panel",
+            style={"gridColumn": "span 2"},
+            children=[
+                html.Div("Composite Score Ranking (Top/Bottom)", className="panel-title"),
+                dcc.Graph(
+                    id="score-ranked",
+                    className="panel-content",
+                    style={"height": "320px"},
+                    config={"displayModeBar": False, "responsive": True},
+                ),
+                html.Div(
+                    className="score-table-wrap",
+                    style={"padding": "0 10px 10px 10px"},
+                    children=[
+                        html.Div("Top candidates (peer-filtered)", className="control-label"),
+                        dash_table.DataTable(
+                            id="score-table",
+                            columns=[
+                                {"name": "Rank", "id": "rank"},
+                                {"name": "Country", "id": "country"},
+                                {"name": "Score", "id": "score"},
+                            ],
+                            data=[],
+                            page_size=8,
+                            style_table={"overflowX": "auto", "overflowY": "auto", "maxHeight": "220px"},
+                            style_cell={
+                                "fontFamily": "system-ui",
+                                "fontSize": "12px",
+                                "padding": "6px",
+                                "backgroundColor": "transparent",
+                                "color": THEME["text"],
+                                "border": f"1px solid {THEME['border']}",
+                            },
+                            style_header={"fontWeight": "600", "backgroundColor": THEME["panel_alt"]},
                         ),
                     ],
                 ),
@@ -2259,9 +2224,7 @@ app.layout = html.Div(
     ],
 )
 
-# -----------------------------------------------------------------------------
 # Callbacks
-# -----------------------------------------------------------------------------
 @app.callback(
     Output("income-band-filter", "value"),
     Output("population-band-filter", "value"),
@@ -2294,10 +2257,11 @@ def update_metric_dropdown(group_name):
     Input("pcp-reset", "n_clicks"),
     Input("income-band-filter", "value"),
     Input("population-band-filter", "value"),
+    Input("selected-countries", "data"),
     State("pcp-constraints", "data"),
 )
 def update_pcp_and_map(dims, color_metric, scale_mode, restyle, reset_clicks,
-                       income_bands, population_bands, stored_constraints):
+                       income_bands, population_bands, selected_countries, stored_constraints):
     trig = (callback_context.triggered[0]["prop_id"] if callback_context.triggered else "")
     dims = dims or []
 
@@ -2313,16 +2277,20 @@ def update_pcp_and_map(dims, color_metric, scale_mode, restyle, reset_clicks,
 
     constraints = clean_pcp_constraints(constraints, dims)
 
-    plot_df = apply_peer_filters(df, income_bands, population_bands)
+    peer_df = apply_peer_filters(df, income_bands, population_bands)
+    plot_df = apply_selection_filter(peer_df, selected_countries)
 
     pcp_fig, selected = make_pcp(dims, color_metric, scale_mode, constraints, data_df=plot_df)
 
     if constraints:
-        status = f"Peer group: {len(plot_df)} countries — Subset: {len(selected)} countries"
+        status = f"Peer group: {len(peer_df)} countries — Subset: {len(selected)} countries"
+    elif selected_countries:
+        status = f"Peer group: {len(peer_df)} countries — Selected: {len(plot_df)} countries"
     else:
-        status = f"Peer group: {len(plot_df)} countries — Subset: none (showing peer group)"
+        status = f"Peer group: {len(peer_df)} countries — Subset: none (showing peer group)"
 
-    return pcp_fig, selected, constraints, status
+    pcp_selected_out = selected if ("pcp.restyleData" in trig or "pcp-reset" in trig) else no_update
+    return pcp_fig, pcp_selected_out, constraints, status
 
 @app.callback(
     Output("world-map", "figure"),
@@ -2342,33 +2310,22 @@ def update_world_map(map_metric, selected_countries, income_bands, population_ba
     Input("pcp-color", "value"),
     Input("income-band-filter", "value"),
     Input("population-band-filter", "value"),
+    Input("selected-countries", "data"),
 )
-def update_opp_risk_scatter(metric, pcp_color, income_bands, population_bands):
+def update_opp_risk_scatter(metric, pcp_color, income_bands, population_bands, selected_countries):
     opportunity_metric = metric
     risk_metric = "Public_Debt_percent_of_GDP" if "Public_Debt_percent_of_GDP" in df.columns else metric
 
-    plot_df = apply_peer_filters(df, income_bands, population_bands)
+    peer_df = apply_peer_filters(df, income_bands, population_bands)
+    plot_df = apply_selection_filter(peer_df, selected_countries)
 
-    # IMPORTANT: do not pass selected-countries here (prevents selection reset flicker)
     return make_opp_risk_scatter(
         opportunity_metric,
         risk_metric,
-        selected_countries=[],        # ✅ keep scatter independent of server-side selection
+        selected_countries=selected_countries or [],
         color_metric=pcp_color,
         data_df=plot_df,
     )
-
-@app.callback(
-    Output("ranked-bar", "figure"),
-    Input("map-metric", "value"),
-    Input("selected-countries", "data"),
-    Input("income-band-filter", "value"),
-    Input("population-band-filter", "value"),
-)
-def update_ranked_bar(metric, selected_countries, income_bands, population_bands):
-    plot_df = apply_peer_filters(df, income_bands, population_bands)
-    return make_ranked_bar(metric, selected_countries or [], data_df=plot_df)
-
 
 
 @app.callback(
@@ -2384,7 +2341,8 @@ def update_gap_views(selected_countries, map_click, income_bands, population_ban
     if map_click:
         selected_country = map_click["points"][0]["location"]
 
-    plot_df = apply_peer_filters(df, income_bands, population_bands)
+    peer_df = apply_peer_filters(df, income_bands, population_bands)
+    plot_df = apply_selection_filter(peer_df, selected_countries)
 
     gap_scatter = make_gap_scatter(selected_countries, selected_country=selected_country, data_df=plot_df)
     gap_ranked = make_gap_ranked_bar(selected_countries, top_n=10, data_df=plot_df)
@@ -2408,7 +2366,6 @@ def set_active_country(map_click, score_click, reset_clicks, back_clicks):
         return map_click["points"][0]["location"]
 
     if "score-ranked" in ctx and score_click:
-        # horizontal bar: country is on y
         return score_click["points"][0].get("y")
 
     return None
@@ -2575,7 +2532,7 @@ def sync_selected_countries(pcp_selected, scatter_selected, _reset_clicks,
 
     if "opp-risk-scatter.selectedData" in ctx:
         if not scatter_selected or not scatter_selected.get("points"):
-            return []
+            return no_update
         countries = []
         for p in scatter_selected["points"]:
             cd = p.get("customdata")
@@ -2590,7 +2547,6 @@ def sync_selected_countries(pcp_selected, scatter_selected, _reset_clicks,
     if "pcp-selected-countries.data" in ctx:
         return _intersect(pcp_selected)
 
-    # if peer filters changed (or anything else), keep selection but clip to peer set
     return _intersect(current_selected)
 
 
@@ -2647,7 +2603,8 @@ def update_score_views(m1, w1, d1, m2, w2, d2, m3, w3, d3, m4, w4, d4,
     if map_click:
         selected_country = map_click["points"][0]["location"]
 
-    plot_df = apply_peer_filters(df, income_bands, population_bands)
+    peer_df = apply_peer_filters(df, income_bands, population_bands)
+    plot_df = apply_selection_filter(peer_df, selected_countries)
 
     spec = build_score_spec(
         metrics=[m1, m2, m3, m4],
@@ -2674,7 +2631,7 @@ def update_score_views(m1, w1, d1, m2, w2, d2, m3, w3, d3, m4, w4, d4,
     ]
 
     metric_txt = ", ".join([f"{label_for(x['metric'])}×{int(x['weight'])}" for x in spec])
-    status = f"Score: {metric_txt} (peer-filtered n={len(plot_df)})"
+    status = f"Score: {metric_txt} (n={len(plot_df)})"
 
     return bar, dist, table_data, status
 
