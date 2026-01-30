@@ -831,6 +831,7 @@ def make_opp_risk_scatter(
     y = pd.to_numeric(col_as_series(data_df, y_metric), errors="coerce")
 
     plot_df = pd.DataFrame({COUNTRY_COL: data_df[COUNTRY_COL], "_x": x, "_y": y}).dropna(subset=["_x", "_y"])
+    plot_df = plot_df[plot_df[COUNTRY_COL].astype("string").str.strip().str.lower().ne("world")]
     if plot_df.empty:
         fig = go.Figure()
         fig.update_layout(template="infra_light")
@@ -1223,7 +1224,7 @@ app.layout = html.Div(
                     "Clear peer filters",
                     id="peer-reset",
                     n_clicks=0,
-                    className="btn",
+                    className="btn filterbtn",
                     style={"height": "36px"},
                 ),
             ],
