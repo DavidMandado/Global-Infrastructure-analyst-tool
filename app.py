@@ -1222,6 +1222,69 @@ def peer_percentile(peer_df, country, metric):
     return (series <= value).sum() / len(series) * 100.0
 
 
+def series_percentile(series: pd.Series, value) -> float:
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if s.empty or pd.isna(value):
+        return np.nan
+    return (s <= value).sum() / len(s) * 100.0
+
+
+def compute_opportunity_risk_scores(peer_df: pd.DataFrame):
+    out = pd.DataFrame({COUNTRY_COL: peer_df[COUNTRY_COL].astype("string")})
+
+    opp_cols = []
+    opp_labels = []
+    risk_cols = []
+    risk_labels = []
+
+    def _add_pct(col, out_col, label):
+        s = pd.to_numeric(col_as_series(peer_df, col), errors="coerce")
+        out[out_col] = _safe_pct(s)
+        return label
+
+    # Opportunity components (higher = better)
+    if "Real_GDP_Growth_Rate_percent" in peer_df.columns:
+        opp_cols.append("_opp_gdp_growth")
+        opp_labels.append(_add_pct("Real_GDP_Growth_Rate_percent", "_opp_gdp_growth", "GDP growth"))
+    if "Population_Growth_Rate" in peer_df.columns:
+        opp_cols.append("_opp_pop_growth")
+        opp_labels.append(_add_pct("Population_Growth_Rate", "_opp_pop_growth", "Population growth"))
+    if {"gdp_pc_pct", "infra_score_pct_mean"}.issubset(peer_df.columns):
+        gap = pd.to_numeric(peer_df["gdp_pc_pct"], errors="coerce") - pd.to_numeric(peer_df["infra_score_pct_mean"], errors="coerce")
+        out["_opp_infra_gap"] = _safe_pct(gap)
+        opp_cols.append("_opp_infra_gap")
+        opp_labels.append("Infra gap vs GDP")
+
+    # Fallback if no components are available
+    if not opp_cols and "gdp_pc_pct" in peer_df.columns:
+        out["_opp_gdp_pc"] = pd.to_numeric(peer_df["gdp_pc_pct"], errors="coerce")
+        opp_cols.append("_opp_gdp_pc")
+        opp_labels.append("GDP per capita (pct)")
+
+    # Risk components (higher = riskier)
+    if "Public_Debt_percent_of_GDP" in peer_df.columns:
+        risk_cols.append("_risk_debt")
+        risk_labels.append(_add_pct("Public_Debt_percent_of_GDP", "_risk_debt", "Public debt"))
+    if "Unemployment_Rate_percent" in peer_df.columns:
+        risk_cols.append("_risk_unemp")
+        risk_labels.append(_add_pct("Unemployment_Rate_percent", "_risk_unemp", "Unemployment"))
+    if "Population_Below_Poverty_Line_percent" in peer_df.columns:
+        risk_cols.append("_risk_poverty")
+        risk_labels.append(_add_pct("Population_Below_Poverty_Line_percent", "_risk_poverty", "Poverty rate"))
+
+    if opp_cols:
+        out["opportunity_score"] = out[opp_cols].mean(axis=1, skipna=True) * 100.0
+    else:
+        out["opportunity_score"] = pd.Series([np.nan] * len(out), index=out.index)
+
+    if risk_cols:
+        out["risk_score"] = out[risk_cols].mean(axis=1, skipna=True) * 100.0
+    else:
+        out["risk_score"] = pd.Series([np.nan] * len(out), index=out.index)
+
+    return out, opp_labels, risk_labels
+
+
 def make_country_kpis(country, peer_df):
     metrics = [m for m in COUNTRY_PROFILE_METRICS if m in peer_df.columns]
     if not metrics:
@@ -1489,6 +1552,85 @@ def make_country_peer_scatter(country, peer_df):
     y_title = "Infrastructure score (percentile points)" if y_metric == "infra_score_pct_mean" else label_for(y_metric)
     fig = card_layout(fig, x_title=label_for(x_metric), y_title=y_title)
     return fig
+
+
+def make_country_investment_outlook(country, peer_df):
+    empty = go.Figure().update_layout(template="infra_light")
+
+    scores_df, opp_labels, risk_labels = compute_opportunity_risk_scores(peer_df)
+    plot_df = scores_df.dropna(subset=["opportunity_score", "risk_score"])
+    if plot_df.empty:
+        return empty, "Opportunity/risk indices are not available for this peer set."
+
+    fig = px.scatter(
+        plot_df,
+        x="opportunity_score",
+        y="risk_score",
+        hover_name=COUNTRY_COL,
+        template="infra_light",
+    )
+    fig.update_traces(
+        marker=dict(color="rgba(17,24,39,0.5)", size=7, line=dict(width=0)),
+        hovertemplate="<b>%{hovertext}</b><br>Opportunity: %{x:.1f}<br>Risk: %{y:.1f}<extra></extra>",
+    )
+
+    x_mid = plot_df["opportunity_score"].median()
+    y_mid = plot_df["risk_score"].median()
+    fig.add_shape(
+        type="line",
+        x0=x_mid, y0=plot_df["risk_score"].min(),
+        x1=x_mid, y1=plot_df["risk_score"].max(),
+        line=dict(width=1, dash="dot", color="rgba(107,114,128,0.8)"),
+        layer="below",
+    )
+    fig.add_shape(
+        type="line",
+        x0=plot_df["opportunity_score"].min(), y0=y_mid,
+        x1=plot_df["opportunity_score"].max(), y1=y_mid,
+        line=dict(width=1, dash="dot", color="rgba(107,114,128,0.8)"),
+        layer="below",
+    )
+
+    row = plot_df[plot_df[COUNTRY_COL] == country]
+    if not row.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=row["opportunity_score"],
+                y=row["risk_score"],
+                mode="markers+text",
+                marker=dict(size=16, symbol="star", color="rgba(59,130,246,0.95)"),
+                text=[country],
+                textposition="top center",
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+    fig.update_layout(showlegend=False)
+    fig = card_layout(fig, x_title="Opportunity index (0-100)", y_title="Risk index (0-100)")
+
+    opp_val = np.nan
+    risk_val = np.nan
+    if not row.empty:
+        opp_val = pd.to_numeric(row["opportunity_score"].iloc[0], errors="coerce")
+        risk_val = pd.to_numeric(row["risk_score"].iloc[0], errors="coerce")
+
+    opp_pct = series_percentile(plot_df["opportunity_score"], opp_val)
+    risk_pct = series_percentile(plot_df["risk_score"], risk_val)
+    opp_txt = "-" if pd.isna(opp_val) else f"{opp_val:.1f}"
+    risk_txt = "-" if pd.isna(risk_val) else f"{risk_val:.1f}"
+    opp_pct_txt = "-" if pd.isna(opp_pct) else f"{opp_pct:.0f}"
+    risk_pct_txt = "-" if pd.isna(risk_pct) else f"{risk_pct:.0f}"
+
+    opp_components = ", ".join(opp_labels) if opp_labels else "n/a"
+    risk_components = ", ".join(risk_labels) if risk_labels else "n/a"
+    summary = (
+        f"Opportunity index: {opp_txt} (peer pct {opp_pct_txt}) | "
+        f"Risk index: {risk_txt} (peer pct {risk_pct_txt}). "
+        f"Components: {opp_components} | {risk_components}"
+    )
+
+    return fig, summary
 
 
 def build_country_metric_table(country, peer_df, metrics):
@@ -2053,6 +2195,24 @@ app.layout = html.Div(
                             className="panel panel-tall",
                             style={"gridColumn": "span 4"},
                             children=[
+                                html.Div("Investment outlook (opportunity vs risk)", className="panel-title"),
+                                html.Div(
+                                    id="country-investment-summary",
+                                    className="control-label",
+                                    style={"padding": "0 12px 6px 12px"},
+                                ),
+                                dcc.Graph(
+                                    id="country-investment-outlook",
+                                    className="panel-content",
+                                    style={"height": "100%"},
+                                    config={"displayModeBar": False, "responsive": True},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            className="panel panel-tall",
+                            style={"gridColumn": "span 4"},
+                            children=[
                                 html.Div("Score contribution (current score spec)", className="panel-title"),
                                 dcc.Graph(
                                     id="country-score-contrib",
@@ -2306,8 +2466,10 @@ def set_country_active_metric(active_cell, click_data, table_data):
     Output("country-peer-bars", "figure"),
     Output("country-radar", "figure"),
     Output("country-metric-dist", "figure"),
-    Output("country-score-contrib", "figure"),
     Output("country-peer-scatter", "figure"),
+    Output("country-investment-outlook", "figure"),
+    Output("country-investment-summary", "children"),
+    Output("country-score-contrib", "figure"),
     Output("country-metric-table", "data"),
     Input("active-country", "data"),
     Input("country-active-metric", "data"),
@@ -2330,7 +2492,7 @@ def update_country_dashboard(country, active_metric, income_bands, population_ba
                              m1, w1, d1, m2, w2, d2, m3, w3, d3, m4, w4, d4):
     empty = go.Figure().update_layout(template="infra_light")
     if not country:
-        return [], empty, empty, empty, empty, empty, []
+        return [], empty, empty, empty, empty, empty, "", empty, []
 
     peer_df = apply_peer_filters(df, income_bands, population_bands)
 
@@ -2374,11 +2536,12 @@ def update_country_dashboard(country, active_metric, income_bands, population_ba
     metric_for_dist = active_metric if active_metric in peer_df.columns else (metrics_for_charts[0] if metrics_for_charts else None)
     dist = make_country_metric_distribution(metric_for_dist, country, peer_df)
 
-    score_fig = make_country_score_contrib(country, peer_df, spec) if spec else empty
     peer_scatter = make_country_peer_scatter(country, peer_df)
+    investment_fig, investment_summary = make_country_investment_outlook(country, peer_df)
+    score_fig = make_country_score_contrib(country, peer_df, spec) if spec else empty
     table_data = build_country_metric_table(country, peer_df, metrics)
 
-    return kpis, bars, radar, dist, score_fig, peer_scatter, table_data
+    return kpis, bars, radar, dist, peer_scatter, investment_fig, investment_summary, score_fig, table_data
 
 
 @app.callback(
