@@ -121,20 +121,40 @@ body {
     background: var(--panel);
 }
 
-/* Make Plotly stand out from the white panel */
-.panel-content {
-    background: var(--panelAlt);
-    border-radius: 12px;
-    padding: 8px;
-    border: 1px solid rgba(17, 24, 39, 0.06);
+/* Plotly layers default to transparent so the inset surface shows */
+.js-plotly-plot,
+.plot-container,
+.svg-container {
+    background: transparent !important;
 }
 
-/* Plotly canvas stays white inside the "plot well" */
-.panel-content .js-plotly-plot,
-.panel-content .plot-container,
-.panel-content .svg-container {
-    background: #ffffff !important;
-    border-radius: 10px;
+/* Inset chart surface for graphs (NOT for panel-tight map/pcp) */
+.panel:not(.panel-tight) .panel-content {
+    background: var(--panelAlt);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 8px;
+    box-shadow: inset 0 1px 0 rgba(17, 24, 39, 0.04);
+}
+
+/* Ensure Plotly canvas doesn't paint over the inset surface */
+.panel:not(.panel-tight) .panel-content .js-plotly-plot,
+.panel:not(.panel-tight) .panel-content .plot-container,
+.panel:not(.panel-tight) .panel-content .svg-container {
+    background: transparent !important;
+}
+
+/* Inset surface for dash tables */
+.panel .dash-table-container,
+.panel .dash-spreadsheet-container {
+    background: var(--panelAlt);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 8px;
+}
+
+#score-table {
+    margin-top: 8px;
 }
 
 
@@ -360,4 +380,44 @@ body {
     .summary-row {
         grid-template-columns: 1fr;
     }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Country KPI strip                                                           */
+/* -------------------------------------------------------------------------- */
+
+.country-kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+}
+
+@media (max-width: 900px) {
+    .country-kpi-strip {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+.country-kpi {
+    background: var(--panelAlt);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px;
+}
+
+.country-kpi .kpi-label {
+    color: var(--muted);
+    font-size: 0.8rem;
+    margin-bottom: 4px;
+}
+
+.country-kpi .kpi-value {
+    font-weight: 700;
+    font-size: 1.05rem;
+}
+
+.country-kpi .kpi-sub {
+    color: var(--muted);
+    font-size: 0.8rem;
+    margin-top: 2px;
 }

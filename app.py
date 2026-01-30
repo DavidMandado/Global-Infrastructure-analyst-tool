@@ -1,4 +1,4 @@
-from dash import Dash, html, dcc, dash_table, Input, Output, State, callback_context
+from dash import Dash, html, dcc, dash_table, Input, Output, State, callback_context, no_update
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -27,8 +27,8 @@ THEME = {
 # -----------------------------------------------------------------------------
 pio.templates["infra_light"] = go.layout.Template(
     layout=dict(
-        paper_bgcolor=THEME["panel"],          # card/figure outer area stays white
-        plot_bgcolor=THEME["panel_alt"],       # ✅ plotting area gets light gray
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
         font=dict(
             family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
             color=THEME["text"],
@@ -55,6 +55,7 @@ pio.templates["infra_light"] = go.layout.Template(
 # Data (load + clean + derive)
 # -----------------------------------------------------------------------------
 COUNTRY_COL = "Country"
+EXCLUDED_ENTITIES = {"world"}
 
 NON_NUMERIC_COLS = {
     "Country",
@@ -273,6 +274,11 @@ def apply_peer_filters(base_df: pd.DataFrame, income_bands, population_bands) ->
 
 DEFAULT_METRIC = "Real_GDP_per_Capita_USD" if "Real_GDP_per_Capita_USD" in df.columns else None
 numeric_cols = df.select_dtypes(include="number").columns.tolist()
+DEFAULT_COUNTRY_METRIC = (
+    "Real_GDP_per_Capita_USD"
+    if "Real_GDP_per_Capita_USD" in df.columns
+    else (numeric_cols[0] if numeric_cols else None)
+)
 
 def pretty_label(col: str) -> str:
     s = col.replace("_", " ").strip()
@@ -368,6 +374,17 @@ DEFAULT_SCORE_METRICS = [
 ]
 DEFAULT_SCORE_WEIGHTS = [3, 2, 2, 1]   # relative weights (0 disables a metric)
 DEFAULT_SCORE_DIRS = ["high", "high", "high", "high"]  # "high" or "low"
+
+COUNTRY_PROFILE_METRICS = [
+    "Real_GDP_per_Capita_USD",
+    "Public_Debt_percent_of_GDP",
+    "Unemployment_Rate_percent",
+    "electricity_access_percent",
+    "internet_users_per_100",
+    "fixed_broadband_per_100",
+    "roadways_km_per_1k",
+    "population_density_per_km2",
+]
 
 def _safe_pct(series: pd.Series) -> pd.Series:
     s = pd.to_numeric(series, errors="coerce")
@@ -831,7 +848,8 @@ def make_opp_risk_scatter(
     y = pd.to_numeric(col_as_series(data_df, y_metric), errors="coerce")
 
     plot_df = pd.DataFrame({COUNTRY_COL: data_df[COUNTRY_COL], "_x": x, "_y": y}).dropna(subset=["_x", "_y"])
-    plot_df = plot_df[plot_df[COUNTRY_COL].astype("string").str.strip().str.lower().ne("world")]
+    plot_df[COUNTRY_COL] = plot_df[COUNTRY_COL].astype("string")
+    plot_df = plot_df[~plot_df[COUNTRY_COL].str.strip().str.lower().isin(EXCLUDED_ENTITIES)]
     if plot_df.empty:
         fig = go.Figure()
         fig.update_layout(template="infra_light")
@@ -900,6 +918,8 @@ def make_ranked_bar(metric: str, selected_countries: list[str], top_n=10, data_d
 
     values = pd.to_numeric(col_as_series(data_df, metric), errors="coerce")
     plot_df = pd.DataFrame({COUNTRY_COL: data_df[COUNTRY_COL], "_v": values}).dropna(subset=["_v"])
+    plot_df[COUNTRY_COL] = plot_df[COUNTRY_COL].astype("string")
+    plot_df = plot_df[~plot_df[COUNTRY_COL].str.strip().str.lower().isin(EXCLUDED_ENTITIES)]
     if plot_df.empty:
         fig = go.Figure()
         fig.update_layout(template="infra_light")
@@ -1005,6 +1025,8 @@ def make_gap_scatter(
 
     plot_df = data_df[[COUNTRY_COL, "gdp_pc_pct", "infra_score_pct_mean", "gap_infra_score_vs_gdp"]].copy()
     plot_df = plot_df.dropna(subset=["gdp_pc_pct", "infra_score_pct_mean"])
+    plot_df[COUNTRY_COL] = plot_df[COUNTRY_COL].astype("string")
+    plot_df = plot_df[~plot_df[COUNTRY_COL].str.strip().str.lower().isin(EXCLUDED_ENTITIES)]
     if plot_df.empty:
         fig = go.Figure()
         fig.update_layout(template="infra_light")
@@ -1160,6 +1182,355 @@ def card_layout(fig, *, x_title=None, y_title=None):
     return fig
 
 
+def format_value(v):
+    if v is None:
+        return "-"
+    try:
+        if pd.isna(v):
+            return "-"
+    except Exception:
+        pass
+    try:
+        num = float(v)
+    except Exception:
+        return str(v)
+    if np.isnan(num):
+        return "-"
+    if float(num).is_integer():
+        return f"{int(num):,}"
+    return f"{num:,.2f}"
+
+
+def peer_percentile(peer_df, country, metric):
+    if metric not in peer_df.columns:
+        return np.nan
+    series = pd.to_numeric(col_as_series(peer_df, metric), errors="coerce").dropna()
+    if series.empty:
+        return np.nan
+
+    value = np.nan
+    if country:
+        row = peer_df[peer_df[COUNTRY_COL] == country]
+        if row.empty:
+            row = df[df[COUNTRY_COL] == country]
+        if not row.empty:
+            value = pd.to_numeric(row[metric].iloc[0], errors="coerce")
+
+    if pd.isna(value):
+        return np.nan
+
+    return (series <= value).sum() / len(series) * 100.0
+
+
+def make_country_kpis(country, peer_df):
+    metrics = [m for m in COUNTRY_PROFILE_METRICS if m in peer_df.columns]
+    if not metrics:
+        metrics = [m for m in numeric_cols if m in peer_df.columns]
+    metrics = metrics[:4]
+
+    if not metrics:
+        return []
+
+    row = df[df[COUNTRY_COL] == country]
+    cards = []
+    for m in metrics:
+        val = np.nan
+        if not row.empty:
+            val = pd.to_numeric(row[m].iloc[0], errors="coerce")
+        pct = peer_percentile(peer_df, country, m)
+        pct_txt = "-" if pd.isna(pct) else f"{pct:.0f}"
+        cards.append(
+            html.Div(
+                className="country-kpi",
+                children=[
+                    html.Div(label_for(m), className="kpi-label"),
+                    html.Div(format_value(val), className="kpi-value"),
+                    html.Div(f"Peer percentile: {pct_txt}", className="kpi-sub"),
+                ],
+            )
+        )
+    return cards
+
+
+def make_country_peer_bars(country, peer_df, metrics):
+    metrics = [m for m in metrics if m in peer_df.columns]
+    if not metrics:
+        fig = go.Figure().update_layout(template="infra_light")
+        return fig
+
+    rows = []
+    country_row = df[df[COUNTRY_COL] == country]
+    for m in metrics:
+        series = pd.to_numeric(col_as_series(peer_df, m), errors="coerce").dropna()
+        if series.empty:
+            continue
+        q25 = series.quantile(0.25)
+        q75 = series.quantile(0.75)
+        median = series.median()
+        country_val = np.nan
+        if not country_row.empty:
+            country_val = pd.to_numeric(country_row[m].iloc[0], errors="coerce")
+        rows.append((m, country_val, median, q25, q75))
+
+    if not rows:
+        fig = go.Figure().update_layout(template="infra_light")
+        return fig
+
+    metrics = [r[0] for r in rows]
+    labels = [label_for(r[0]) for r in rows]
+    country_vals = [r[1] for r in rows]
+    medians = [r[2] for r in rows]
+    q25s = [r[3] for r in rows]
+    q75s = [r[4] for r in rows]
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=labels,
+            y=q75s,
+            mode="lines",
+            line=dict(color="rgba(107,114,128,0.25)"),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=labels,
+            y=q25s,
+            mode="lines",
+            line=dict(color="rgba(107,114,128,0.25)"),
+            fill="tonexty",
+            fillcolor="rgba(107,114,128,0.15)",
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=labels,
+            y=medians,
+            mode="lines+markers",
+            name="Peer median",
+            line=dict(color="rgba(107,114,128,0.85)"),
+            marker=dict(size=6),
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=labels,
+            y=country_vals,
+            name=country or "Country",
+            marker=dict(color="rgba(59,130,246,0.85)"),
+            customdata=metrics,
+            hovertemplate="<b>%{x}</b><br>Country: %{y}<extra></extra>",
+        )
+    )
+
+    fig.update_layout(template="infra_light", barmode="overlay")
+    fig = card_layout(fig, y_title="Value")
+    return fig
+
+
+def make_country_radar(country, peer_df, metrics):
+    metrics = [m for m in metrics if m in peer_df.columns]
+    if not metrics:
+        fig = go.Figure().update_layout(template="infra_light")
+        return fig
+
+    values = []
+    for m in metrics:
+        pct = peer_percentile(peer_df, country, m)
+        if pd.notna(pct):
+            values.append((m, pct))
+
+    if not values:
+        fig = go.Figure().update_layout(template="infra_light")
+        return fig
+
+    r = [v[1] for v in values]
+    theta = [label_for(v[0]) for v in values]
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatterpolar(
+            r=r,
+            theta=theta,
+            fill="toself",
+            name=country or "Country",
+            line=dict(color="rgba(59,130,246,0.85)"),
+        )
+    )
+    fig.update_layout(
+        template="infra_light",
+        showlegend=False,
+        polar=dict(
+            radialaxis=dict(range=[0, 100], tickfont=dict(size=10)),
+            angularaxis=dict(tickfont=dict(size=10)),
+        ),
+        margin=dict(l=20, r=20, t=20, b=20),
+    )
+    return fig
+
+
+def make_country_metric_distribution(metric, country, peer_df):
+    return make_distribution(metric, selected_country=country, data_df=peer_df)
+
+
+def make_country_score_contrib(country, peer_df, spec):
+    if not spec:
+        fig = go.Figure().update_layout(template="infra_light")
+        return fig
+
+    rows = []
+    for item in spec:
+        metric = item["metric"]
+        if metric not in peer_df.columns:
+            continue
+        pct = peer_percentile(peer_df, country, metric)
+        if pd.isna(pct):
+            continue
+        if item.get("direction") == "low":
+            pct = 100.0 - pct
+        weight = float(item.get("weight", 0))
+        contrib = (pct / 100.0) * weight
+        rows.append((metric, pct, weight, contrib))
+
+    if not rows:
+        fig = go.Figure().update_layout(template="infra_light")
+        return fig
+
+    metrics = [r[0] for r in rows]
+    labels = [label_for(r[0]) for r in rows]
+    pcts = [r[1] for r in rows]
+    weights = [r[2] for r in rows]
+    contribs = [r[3] for r in rows]
+
+    customdata = [[m, p, w] for m, p, w in zip(metrics, pcts, weights)]
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=labels,
+            y=contribs,
+            customdata=customdata,
+            marker=dict(color="rgba(59,130,246,0.85)"),
+            hovertemplate="<b>%{x}</b><br>Percentile: %{customdata[1]:.0f}<br>Weight: %{customdata[2]:.0f}<br>Contribution: %{y:.2f}<extra></extra>",
+        )
+    )
+
+    score_df = compute_weighted_score(peer_df, spec)
+    score_row = score_df[score_df[COUNTRY_COL] == country]
+    if not score_row.empty:
+        score_val = pd.to_numeric(score_row["score_0_100"].iloc[0], errors="coerce")
+        if pd.notna(score_val):
+            fig.add_annotation(
+                x=1,
+                y=1.1,
+                xref="paper",
+                yref="paper",
+                text=f"Total score: {score_val:.1f}",
+                showarrow=False,
+                font=dict(color=THEME["muted_text"], size=12),
+            )
+
+    fig.update_layout(template="infra_light", showlegend=False)
+    fig = card_layout(fig, y_title="Weighted contribution")
+    return fig
+
+
+def make_country_peer_scatter(country, peer_df):
+    x_metric = "Real_GDP_per_Capita_USD" if "Real_GDP_per_Capita_USD" in peer_df.columns else (numeric_cols[0] if numeric_cols else None)
+    if "infra_score_pct_mean" in peer_df.columns:
+        y_metric = "infra_score_pct_mean"
+    elif "electricity_access_percent" in peer_df.columns:
+        y_metric = "electricity_access_percent"
+    else:
+        y_metric = numeric_cols[1] if len(numeric_cols) > 1 else (numeric_cols[0] if numeric_cols else None)
+
+    if not x_metric or not y_metric:
+        fig = go.Figure().update_layout(template="infra_light")
+        return fig
+
+    x = pd.to_numeric(col_as_series(peer_df, x_metric), errors="coerce")
+    y = pd.to_numeric(col_as_series(peer_df, y_metric), errors="coerce")
+    if y_metric == "infra_score_pct_mean":
+        y = y * 100.0
+
+    plot_df = pd.DataFrame({COUNTRY_COL: peer_df[COUNTRY_COL], "_x": x, "_y": y}).dropna(subset=["_x", "_y"])
+    if plot_df.empty:
+        fig = go.Figure().update_layout(template="infra_light")
+        return fig
+
+    fig = px.scatter(
+        plot_df,
+        x="_x",
+        y="_y",
+        hover_name=COUNTRY_COL,
+        template="infra_light",
+    )
+    fig.update_traces(marker=dict(color="rgba(17,24,39,0.5)", size=7, line=dict(width=0)))
+
+    row = plot_df[plot_df[COUNTRY_COL] == country]
+    if not row.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=row["_x"],
+                y=row["_y"],
+                mode="markers+text",
+                marker=dict(size=14, symbol="star", color="rgba(59,130,246,0.95)"),
+                text=[country],
+                textposition="top center",
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+    y_title = "Infrastructure score (percentile points)" if y_metric == "infra_score_pct_mean" else label_for(y_metric)
+    fig = card_layout(fig, x_title=label_for(x_metric), y_title=y_title)
+    return fig
+
+
+def build_country_metric_table(country, peer_df, metrics):
+    base = [m for m in metrics if m in peer_df.columns]
+    extras = [m for m in numeric_cols if m in peer_df.columns and m not in base]
+    all_metrics = base + extras
+    max_count = 20
+    all_metrics = all_metrics[:max_count]
+
+    if not all_metrics:
+        return []
+
+    country_row = df[df[COUNTRY_COL] == country]
+    rows = []
+    for m in all_metrics:
+        series = pd.to_numeric(col_as_series(peer_df, m), errors="coerce").dropna()
+        val = np.nan
+        if not country_row.empty:
+            val = pd.to_numeric(country_row[m].iloc[0], errors="coerce")
+
+        pct = peer_percentile(peer_df, country, m)
+        if pd.isna(pct) and pd.notna(val) and not series.empty:
+            pct = (series <= val).sum() / len(series) * 100.0
+
+        if pd.notna(val) and not series.empty:
+            rank = int((series > val).sum() + 1)
+        else:
+            rank = None
+
+        rows.append(
+            {
+                "metric": label_for(m),
+                "metric_key": m,
+                "value": format_value(val),
+                "peer_pct": "-" if pd.isna(pct) else f"{pct:.0f}",
+                "peer_rank": "-" if rank is None else str(rank),
+            }
+        )
+
+    return rows
+
+
 # -----------------------------------------------------------------------------
 # Layout
 # -----------------------------------------------------------------------------
@@ -1174,6 +1545,7 @@ app.layout = html.Div(
         dcc.Store(id="active-country", data=None),
         dcc.Store(id="selected-countries", data=[]),        # shared multi-country selection (empty = no subset)
         dcc.Store(id="selected-country-store", data=None),  # reserved for later (single country selection, not used yet)
+        dcc.Store(id="country-active-metric", data=DEFAULT_COUNTRY_METRIC),
 
 
 
@@ -1456,7 +1828,7 @@ app.layout = html.Div(
                                 "fontFamily": "system-ui",
                                 "fontSize": "12px",
                                 "padding": "6px",
-                                "backgroundColor": THEME["panel"],
+                                "backgroundColor": "transparent",
                                 "color": THEME["text"],
                                 "border": f"1px solid {THEME['border']}",
                             },
@@ -1620,7 +1992,7 @@ app.layout = html.Div(
                     className="selected-country",
                     style={"display": "flex", "alignItems": "center", "justifyContent": "space-between", "gap": "12px"},
                     children=[
-                        html.Button("← Back to global overview", id="back-to-global", n_clicks=0, className="btn"),
+                        html.Button("Back to global overview", id="back-to-global", n_clicks=0, className="btn"),
                         html.Div(id="country-title", style={"fontWeight": "600"}),
                     ],
                 ),
@@ -1628,24 +2000,106 @@ app.layout = html.Div(
                     className="app-grid2",
                     children=[
                         html.Div(
-                            className="panel panel-tall",
-                            style={"gridColumn": "span 2"},
-                            children=[html.Div("Economic Snapshot", className="panel-title"), dcc.Graph(id="country-econ", className="panel-content")],
+                            className="panel",
+                            style={"gridColumn": "span 4"},
+                            children=[
+                                html.Div("Country KPIs", className="panel-title"),
+                                html.Div(id="country-kpis", className="country-kpi-strip"),
+                            ],
                         ),
                         html.Div(
                             className="panel panel-tall",
                             style={"gridColumn": "span 2"},
-                            children=[html.Div("Labor & Demographics", className="panel-title"), dcc.Graph(id="country-labor", className="panel-content")],
+                            children=[
+                                html.Div("Peer comparison (country vs peer median/IQR)", className="panel-title"),
+                                dcc.Graph(
+                                    id="country-peer-bars",
+                                    className="panel-content",
+                                    style={"height": "100%"},
+                                    config={"displayModeBar": False, "responsive": True},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            className="panel panel-tall",
+                            style={"gridColumn": "span 2"},
+                            children=[
+                                html.Div("Country percentile profile", className="panel-title"),
+                                dcc.Graph(
+                                    id="country-radar",
+                                    className="panel-content",
+                                    style={"height": "100%"},
+                                    config={"displayModeBar": False, "responsive": True},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            className="panel panel-tall",
+                            style={"gridColumn": "span 2"},
+                            children=[
+                                html.Div("Active metric distribution", className="panel-title"),
+                                dcc.Graph(
+                                    id="country-metric-dist",
+                                    className="panel-content",
+                                    style={"height": "100%"},
+                                    config={"displayModeBar": False, "responsive": True},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            className="panel panel-tall",
+                            style={"gridColumn": "span 2"},
+                            children=[
+                                html.Div("Peer scatter position", className="panel-title"),
+                                dcc.Graph(
+                                    id="country-peer-scatter",
+                                    className="panel-content",
+                                    style={"height": "100%"},
+                                    config={"displayModeBar": False, "responsive": True},
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            className="panel panel-tall",
+                            style={"gridColumn": "span 4"},
+                            children=[
+                                html.Div("Score contribution (current score spec)", className="panel-title"),
+                                dcc.Graph(
+                                    id="country-score-contrib",
+                                    className="panel-content",
+                                    style={"height": "100%"},
+                                    config={"displayModeBar": False, "responsive": True},
+                                ),
+                            ],
                         ),
                         html.Div(
                             className="panel",
-                            style={"gridColumn": "span 2"},
-                            children=[html.Div("Infrastructure Snapshot", className="panel-title"), dcc.Graph(id="country-infra", className="panel-content")],
-                        ),
-                        html.Div(
-                            className="panel",
-                            style={"gridColumn": "span 2"},
-                            children=[html.Div("Global Rank Context", className="panel-title"), dcc.Graph(id="country-rank", className="panel-content")],
+                            style={"gridColumn": "span 4"},
+                            children=[
+                                html.Div("Deep-dive metrics", className="panel-title"),
+                                dash_table.DataTable(
+                                    id="country-metric-table",
+                                    columns=[
+                                        {"name": "Metric", "id": "metric"},
+                                        {"name": "Value", "id": "value"},
+                                        {"name": "Peer percentile", "id": "peer_pct"},
+                                        {"name": "Peer rank", "id": "peer_rank"},
+                                        {"name": "metric_key", "id": "metric_key", "hidden": True},
+                                    ],
+                                    data=[],
+                                    page_size=12,
+                                    style_table={"overflowX": "auto"},
+                                    style_cell={
+                                        "fontFamily": "system-ui",
+                                        "fontSize": "12px",
+                                        "padding": "6px",
+                                        "backgroundColor": "transparent",
+                                        "color": THEME["text"],
+                                        "border": f"1px solid {THEME['border']}",
+                                    },
+                                    style_header={"fontWeight": "600", "backgroundColor": THEME["panel_alt"]},
+                                ),
+                            ],
                         ),
                     ],
                 ),
@@ -1830,49 +2284,110 @@ def toggle_dashboard_views(country):
     )
 
 @app.callback(
-    Output("country-econ", "figure"),
-    Output("country-labor", "figure"),
-    Output("country-infra", "figure"),
-    Output("country-rank", "figure"),
+    Output("country-active-metric", "data"),
+    Input("country-metric-table", "active_cell"),
+    Input("country-score-contrib", "clickData"),
+    State("country-metric-table", "data"),
+    prevent_initial_call=True,
+)
+def set_country_active_metric(active_cell, click_data, table_data):
+    if active_cell and table_data:
+        row_idx = active_cell.get("row")
+        if row_idx is not None and 0 <= row_idx < len(table_data):
+            metric_key = table_data[row_idx].get("metric_key")
+            if metric_key:
+                return metric_key
+
+    if click_data and click_data.get("points"):
+        cd = click_data["points"][0].get("customdata")
+        if isinstance(cd, (list, tuple)):
+            metric_key = cd[0] if cd else None
+        else:
+            metric_key = cd
+        if metric_key:
+            return metric_key
+
+    return no_update
+
+
+@app.callback(
+    Output("country-kpis", "children"),
+    Output("country-peer-bars", "figure"),
+    Output("country-radar", "figure"),
+    Output("country-metric-dist", "figure"),
+    Output("country-score-contrib", "figure"),
+    Output("country-peer-scatter", "figure"),
+    Output("country-metric-table", "data"),
     Input("active-country", "data"),
+    Input("country-active-metric", "data"),
     Input("income-band-filter", "value"),
     Input("population-band-filter", "value"),
+    Input("score-metric-1", "value"),
+    Input("score-weight-1", "value"),
+    Input("score-direction-1", "value"),
+    Input("score-metric-2", "value"),
+    Input("score-weight-2", "value"),
+    Input("score-direction-2", "value"),
+    Input("score-metric-3", "value"),
+    Input("score-weight-3", "value"),
+    Input("score-direction-3", "value"),
+    Input("score-metric-4", "value"),
+    Input("score-weight-4", "value"),
+    Input("score-direction-4", "value"),
 )
-def update_country_dashboard(country, income_bands, population_bands):
+def update_country_dashboard(country, active_metric, income_bands, population_bands,
+                             m1, w1, d1, m2, w2, d2, m3, w3, d3, m4, w4, d4):
     empty = go.Figure().update_layout(template="infra_light")
     if not country:
-        return empty, empty, empty, empty
-
-    row_df = df[df[COUNTRY_COL] == country]
-    if row_df.empty:
-        return empty, empty, empty, empty
-    row = row_df.iloc[0]
-
-    econ_fig = go.Figure(
-        go.Bar(
-            x=["GDP per Capita", "Public Debt"],
-            y=[row.get("Real_GDP_per_Capita_USD"), row.get("Public_Debt_percent_of_GDP")],
-        )
-    ).update_layout(template="infra_light")
-
-    labor_fig = go.Figure(
-        go.Bar(
-            x=["Unemployment", "Youth Unemployment"],
-            y=[row.get("Unemployment_Rate_percent"), row.get("Youth_Unemployment_Rate_percent")],
-        )
-    ).update_layout(template="infra_light")
-
-    infra_fig = go.Figure(
-        go.Bar(
-            x=["Electricity Access", "Roadways"],
-            y=[row.get("electricity_access_percent"), row.get("roadways_km")],
-        )
-    ).update_layout(template="infra_light")
+        return [], empty, empty, empty, empty, empty, []
 
     peer_df = apply_peer_filters(df, income_bands, population_bands)
-    rank_fig = make_ranked_bar("Real_GDP_per_Capita_USD", [country], data_df=peer_df)
 
-    return econ_fig, labor_fig, infra_fig, rank_fig
+    metrics = [m for m in COUNTRY_PROFILE_METRICS if m in peer_df.columns]
+    if not metrics:
+        metrics = [m for m in numeric_cols if m in peer_df.columns]
+
+    kpis = make_country_kpis(country, peer_df)
+
+    spec = build_score_spec(
+        metrics=[m1, m2, m3, m4],
+        weights=[w1, w2, w3, w4],
+        dirs=[d1, d2, d3, d4],
+    )
+
+    if spec:
+        score_df = compute_weighted_score(peer_df, spec)
+        score_row = score_df[score_df[COUNTRY_COL] == country]
+        if not score_row.empty:
+            score_val = pd.to_numeric(score_row["score_0_100"].iloc[0], errors="coerce")
+            series = pd.to_numeric(score_df["score_0_100"], errors="coerce").dropna()
+            if pd.notna(score_val) and not series.empty:
+                pct = (series <= score_val).sum() / len(series) * 100.0
+            else:
+                pct = np.nan
+            pct_txt = "-" if pd.isna(pct) else f"{pct:.0f}"
+            score_kpi = html.Div(
+                className="country-kpi",
+                children=[
+                    html.Div("Composite score", className="kpi-label"),
+                    html.Div("-" if pd.isna(score_val) else f"{score_val:.1f}", className="kpi-value"),
+                    html.Div(f"Peer percentile: {pct_txt}", className="kpi-sub"),
+                ],
+            )
+            kpis = [score_kpi] + (kpis[:3] if kpis else [])
+
+    metrics_for_charts = metrics[:8] if metrics else []
+    bars = make_country_peer_bars(country, peer_df, metrics_for_charts)
+    radar = make_country_radar(country, peer_df, metrics_for_charts)
+
+    metric_for_dist = active_metric if active_metric in peer_df.columns else (metrics_for_charts[0] if metrics_for_charts else None)
+    dist = make_country_metric_distribution(metric_for_dist, country, peer_df)
+
+    score_fig = make_country_score_contrib(country, peer_df, spec) if spec else empty
+    peer_scatter = make_country_peer_scatter(country, peer_df)
+    table_data = build_country_metric_table(country, peer_df, metrics)
+
+    return kpis, bars, radar, dist, score_fig, peer_scatter, table_data
 
 
 @app.callback(
@@ -2012,3 +2527,4 @@ def update_score_views(m1, w1, d1, m2, w2, d2, m3, w3, d3, m4, w4, d4,
 
 if __name__ == "__main__":
     app.run(debug=True)
+
