@@ -2084,10 +2084,11 @@ app.layout = html.Div(
                                         {"name": "Value", "id": "value"},
                                         {"name": "Peer percentile", "id": "peer_pct"},
                                         {"name": "Peer rank", "id": "peer_rank"},
-                                        {"name": "metric_key", "id": "metric_key", "hidden": True},
+                                        {"name": "metric_key", "id": "metric_key"},
                                     ],
                                     data=[],
                                     page_size=12,
+                                    hidden_columns=["metric_key"],
                                     style_table={"overflowX": "auto"},
                                     style_cell={
                                         "fontFamily": "system-ui",
