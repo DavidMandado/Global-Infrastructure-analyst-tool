@@ -1667,7 +1667,7 @@ app.layout = html.Div(
             children="Click a country on the map to see more information.",
         ),
         dcc.Store(id="active-country", data=None),
-        dcc.Store(id="selected-countries", data=[]),      
+        dcc.Store(id="selected-countries", data=[]),    
         dcc.Store(id="selected-country-store", data=None), 
         dcc.Store(id="country-active-metric", data=DEFAULT_COUNTRY_METRIC),
 
